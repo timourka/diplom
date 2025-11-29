@@ -4,7 +4,7 @@ from ultralytics import YOLO
 
 # ==== НАСТРОЙКИ ====
 
-MODEL_PATH = "runs/detect/expiry_all/weights/best.pt"  # путь к обученной модели
+MODEL_PATH = "runs/detect/expiry_all2/weights/best.pt"  # путь к обученной модели
 VIDEO_SOURCE = "medias/IMG_5071.MOV"  # или 0 для вебки: VIDEO_SOURCE = 0
 
 CONF_THRES = 0.3           # порог уверенности
