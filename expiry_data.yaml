@@ -1,0 +1,7 @@
+path: ./dataset    # путь до корня датасета
+
+train: images      # и train, и val указывают на ОДНУ и ту же папку
+val: images
+
+nc: 1
+names: [expiry_date]
