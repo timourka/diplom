@@ -1,0 +1,30 @@
+@startuml
+left to right direction
+
+actor "Пользователь\nприложения" as User
+actor "Администратор\nсистемы" as Admin
+actor "Подсистема\nобучения модели" as TrainingService
+
+rectangle "Система поиска даты\nна упаковке" as System {
+    usecase "Сканировать\nупаковку" as UC_Scan
+    usecase "Получить\nподсветку даты" as UC_Highlight
+    usecase "Сообщить\nоб ошибке" as UC_Report
+    usecase "Просмотреть\nисторию сканирований" as UC_History
+
+    usecase "Запустить\nдообучение модели" as UC_Retrain
+    usecase "Проанализировать\nстатистику качества" as UC_Stats
+}
+
+User --> UC_Scan
+User --> UC_History
+User --> UC_Report
+
+UC_Scan --> UC_Highlight : <<include>>
+UC_Highlight ..> UC_Report : <<extend>>
+
+Admin --> UC_Retrain
+Admin --> UC_Stats
+
+UC_Retrain --> TrainingService : <<include>>
+
+@enduml

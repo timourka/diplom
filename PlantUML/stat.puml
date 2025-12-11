@@ -1,0 +1,19 @@
+@startuml
+[*] --> Idle
+
+state Idle {
+}
+
+Idle --> CaptureFrame : старт сканирования
+CaptureFrame --> Preprocess : кадр получен
+Preprocess --> RunInference : данные подготовлены
+RunInference --> Postprocess : предсказания получены
+Postprocess --> DisplayResult : выбрана лучшая область
+DisplayResult --> CaptureFrame : следующий кадр
+
+Postprocess --> HandleError : нет детекции / ошибка
+HandleError --> CaptureFrame : повторная попытка
+HandleError --> Idle : остановка сканирования
+DisplayResult --> Idle : остановка сканирования
+
+@enduml

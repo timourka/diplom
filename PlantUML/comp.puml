@@ -1,0 +1,14 @@
+@startuml
+component "AnnotationTool" as AnnotationTool
+component "TrainingService" as TrainingService
+component "DetectionService" as DetectionService
+component "MobileClient" as MobileClient
+database "Database" as DB
+
+MobileClient -down- DetectionService : REST API
+
+AnnotationTool -down- DB : чтение/запись\nразметки
+TrainingService -down- DB : доступ к датасету\nи метрикам
+TrainingService -right- DetectionService : обновление\nверсии модели
+
+@enduml

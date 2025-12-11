@@ -1,0 +1,55 @@
+@startuml
+hide circle
+
+entity "User" as User {
+    * id : int
+    --
+    email : string
+    settings : json
+}
+
+entity "Scan" as Scan {
+    * id : int
+    --
+    datetime : datetime
+    status : string
+    model_version_id : int
+}
+
+entity "Image" as Image {
+    * id : int
+    --
+    path : string
+}
+
+entity "BoundingBox" as BoundingBox {
+    * id : int
+    --
+    x : int
+    y : int
+    width : int
+    height : int
+    is_ground_truth : bool
+}
+
+entity "ModelVersion" as ModelVersion {
+    * id : int
+    --
+    trained_at : datetime
+    metrics : string
+}
+
+entity "Feedback" as Feedback {
+    * id : int
+    --
+    comment : string
+}
+
+User ||--o{ Scan : "1:M"
+Scan ||--o{ Image : "1:M"
+Image ||--o{ BoundingBox : "1:M"
+ModelVersion ||--o{ Scan : "1:M"
+User ||--o{ Feedback : "1:M"
+Image ||--o{ Feedback : "1:M"
+
+@enduml

@@ -1,0 +1,60 @@
+@startuml
+class DetectorApp {
+    - model : YoloModel
+    - datasetManager : DatasetManager
+    + run()
+    + processFrame(frame)
+}
+
+class VideoAnnotator {
+    - datasetManager : DatasetManager
+    + loadVideo(path)
+    + annotateFrame()
+    + saveAnnotations()
+}
+
+class DatasetManager {
+    + loadDataset(path)
+    + saveSample(image, bbox)
+    + getTrainingData()
+}
+
+class YoloModel {
+    - weightsPath : string
+    + loadWeights(path)
+    + infer(image) : DetectionResult[]
+}
+
+class Trainer {
+    - model : YoloModel
+    - datasetManager : DatasetManager
+    + train()
+    + evaluate() : float
+}
+
+class DetectionResult {
+    + x : int
+    + y : int
+    + width : int
+    + height : int
+    + confidence : float
+}
+
+class FeedbackSample {
+    + imagePath : string
+    + bbox : DetectionResult
+    + toYoloFormat() : string
+}
+
+DetectorApp --> YoloModel
+DetectorApp --> DatasetManager
+
+VideoAnnotator --> DatasetManager
+
+Trainer --> YoloModel
+Trainer --> DatasetManager
+
+YoloModel --> DetectionResult
+FeedbackSample --> DetectionResult
+
+@enduml

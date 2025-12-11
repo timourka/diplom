@@ -1,0 +1,20 @@
+@startuml
+
+node "Смартфон\nпользователя" as Phone {
+    component "MobileClient"
+    component "Встроенная\nмодель YOLO" as EmbeddedModel
+}
+
+node "Сервер приложений" as AppServer {
+    component "DetectionService"
+    component "TrainingService\n(прод)" as ProdTraining
+}
+
+node "Сервер БД" as DBServer {
+    database "PostgreSQL" as PgDB
+}
+
+Phone --> AppServer : HTTPS
+AppServer --> DBServer : SQL
+
+@enduml
