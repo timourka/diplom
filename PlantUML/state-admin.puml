@@ -1,0 +1,40 @@
+@startuml
+left to right direction
+title Диаграмма состояний приложения администратора
+
+[*] --> AdminMainGuest
+
+state "Главное окно\n(без авторизации)" as AdminMainGuest
+state "Форма авторизации\nадминистратора" as AdminLogin
+state "Главное окно\nадминистратора" as AdminMain
+state "Форма списка\nпользователей" as UsersForm
+state "Форма сообщений\nоб ошибках" as ReportsForm
+state "Форма статистики\nсистемы" as StatsForm
+
+' --- Гостевой режим ---
+AdminMainGuest --> AdminLogin : выбран пункт \ "Войти"
+AdminMainGuest --> [*]        : окно закрыто
+
+' --- Авторизация ---
+AdminLogin --> AdminMain      : успешная авторизация
+AdminLogin --> AdminMainGuest : отмена / неверный пароль
+AdminLogin --> [*]            : окно закрыто
+
+' --- Рабочее окно администратора ---
+AdminMain --> UsersForm       : меню \"Пользователи"
+AdminMain --> ReportsForm     : меню \"Ошибки"
+AdminMain --> StatsForm       : меню \"Статистика"
+AdminMain --> AdminMainGuest  : кнопка \"Выход"
+AdminMain --> [*]             : окно закрыто
+
+' --- Внутренние формы ---
+UsersForm --> AdminMain       : кнопка \"Назад"
+UsersForm --> [*]             : окно закрыто
+
+ReportsForm --> AdminMain     : кнопка \"Назад"
+ReportsForm --> [*]           : окно закрыто
+
+StatsForm --> AdminMain       : кнопка \"Назад"
+StatsForm --> [*]             : окно закрыто
+
+@enduml
