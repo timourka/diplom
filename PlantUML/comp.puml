@@ -1,14 +1,60 @@
 @startuml
-component "AnnotationTool" as AnnotationTool
-component "TrainingService" as TrainingService
-component "DetectionService" as DetectionService
-component "MobileClient" as MobileClient
-database "Database" as DB
+title Диаграмма компонентов системы по слоям
 
-MobileClient -down- DetectionService : REST API
+' ================== CLIENT LAYER ==================
+package "Client layer" {
 
-AnnotationTool -down- DB : чтение/запись\nразметки
-TrainingService -down- DB : доступ к датасету\nи метрикам
-TrainingService -right- DetectionService : обновление\nверсии модели
+  component "mobile_app.apk" <<executable>> as MobileClient
+  component "admin_client.exe" <<executable>> as AdminClient
+}
+
+' ================== SERVER LAYER ==================
+package "Server layer" {
+
+  component "backend_api.exe" <<executable>> as BackendAPI
+  component "detection_service.exe" <<executable>> as DetectionService
+  component "training_service.exe" <<executable>> as TrainingService
+  component "annotation_tool.exe" <<executable>> as AnnotationTool
+}
+
+' ================== DATA LAYER ==================
+package "Data layer" {
+
+  database "products.db" <<table>> as DB
+}
+
+' ================== EXTERNAL LIBRARIES ==================
+package "External libraries" {
+
+  component "yolo.dll" <<library>> as YOLO
+  component "yolo_mobile.tflite" <<library>> as YOLOMobile
+  component "opencv.dll" <<library>> as OpenCV
+  component "fastapi.py" <<file>> as WebFramework
+  component "android_camera.dll" <<library>> as MobileSDK
+}
+
+' ============ ЗАВИСИМОСТИ МЕЖДУ КОМПОНЕНТАМИ ============
+
+' Клиенты -> сервер
+MobileClient ..> BackendAPI : HTTPS REST
+AdminClient  ..> BackendAPI : HTTPS REST
+
+' Внутри серверного слоя
+BackendAPI  ..> DetectionService : вызовы детекции
+BackendAPI  ..> DB               : SQL-запросы
+BackendAPI  ..> WebFramework     : обработка HTTP\nмаршрутизация
+
+DetectionService ..> YOLO   : инференс модели
+DetectionService ..> OpenCV : обработка изображений
+
+TrainingService  ..> DB     : датасет и метрики
+TrainingService  ..> YOLO   : обучение / дообучение
+TrainingService  ..> OpenCV : аугментации
+
+AnnotationTool   ..> DB     : чтение/запись разметки
+
+' Клиент -> системные библиотеки платформы и мобильная YOLO
+MobileClient ..> MobileSDK   : доступ к камере и медиа
+MobileClient ..> YOLOMobile  : офлайн-детекция даты\nна устройстве
 
 @enduml

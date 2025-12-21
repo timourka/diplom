@@ -36,5 +36,5 @@ ReportsForm --> [*]           : окно закрыто
 
 StatsForm --> AdminMain       : кнопка \"Назад"
 StatsForm --> [*]             : окно закрыто
-
+  
 @enduml

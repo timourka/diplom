@@ -1,20 +1,47 @@
 @startuml
+title Диаграмма развертывания системы
 
+' === Смартфон пользователя ===
 node "Смартфон\nпользователя" as Phone {
-    component "MobileClient"
-    component "Встроенная\nмодель YOLO" as EmbeddedModel
+    component "mobile_app.apk" as MobileClient
+    component "yolo_mobile.tflite\n(встроенная модель YOLO)" as EmbeddedModel
 }
 
+' === Рабочее место администратора ===
+node "Рабочее место\nадминистратора" as AdminHost {
+    component "admin_client.exe" as AdminClient
+}
+
+' === Сервер приложений (прод) ===
 node "Сервер приложений" as AppServer {
-    component "DetectionService"
-    component "TrainingService\n(прод)" as ProdTraining
+    component "backend_api.exe" as BackendAPI
+    component "detection_service.exe" as DetectionService
 }
 
+' === Сервер обучения / разработки модели ===
+node "Сервер обучения\nи разметки" as TrainServer {
+    component "training_service.exe" as ProdTraining
+    component "annotation_tool.exe" as AnnotationTool
+}
+
+' === Сервер БД ===
 node "Сервер БД" as DBServer {
-    database "PostgreSQL" as PgDB
+    database "products.db\n(PostgreSQL)" as PgDB
 }
 
-Phone --> AppServer : HTTPS
-AppServer --> DBServer : SQL
+' === Соединения между узлами ===
 
+' Клиентские приложения общаются с backend API
+Phone --> AppServer      : HTTPS (REST API)
+AdminHost --> AppServer  : HTTPS (REST API)
+
+' Backend API работает с БД
+AppServer --> DBServer   : SQL (TCP)
+
+' Сервис обучения и инструмент разметки тоже используют БД
+TrainServer --> DBServer : SQL (датасет,\nошибки, пользователи)
+
+' Обновление модели детекции на сервере\n( доставки новых весов )
+TrainServer -- AppServer : деплой новой\nверсии модели
+   
 @enduml
