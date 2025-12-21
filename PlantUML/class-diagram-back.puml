@@ -1,0 +1,107 @@
+@startuml
+
+' ====================== BACKEND ======================
+
+package "Backend Repositories" <<layer>> {
+
+    class UserRepository {
+        + findById(id : int) : User
+        + findAll() : List
+        + save(user : User) : void
+    }
+
+    class ProductRepository {
+        + findById(id : int) : Product
+        + save(product : Product) : void
+    }
+
+    class StoredProductRepository {
+        + findByUser(userId : int) : List
+        + save(item : StoredProduct) : void
+        + delete(id : int) : void
+    }
+
+    class ScanSessionRepository {
+        + save(session : ScanSession) : void
+        + findByUser(userId : int) : List
+    }
+
+    class ErrorReportRepository {
+        + save(report : ErrorReport) : void
+        + findAll() : List
+        + delete(id : int) : void
+    }
+}
+
+package "Backend Logic & Helpers" <<layer>> {
+
+    class AuthService {
+        + loginUser(email : String, password : String) : User
+        + loginAdmin(email : String, password : String) : Admin
+        + validateToken(token : String) : Boolean
+    }
+
+    class FeedbackService {
+        + submitError(report : ErrorReport, sample : FeedbackSample) : void
+        + listReports() : List
+    }
+
+    class DatasetManager {
+        + loadDataset(path : String) : void
+        + saveSample(sample : FeedbackSample) : void
+        + getTrainingData() : List
+    }
+
+    class YoloModel {
+        - weightsPath : String
+        + loadWeights(path : String) : void
+        + infer(image) : DetectionResult[ ]
+    }
+
+    class Trainer {
+        - model : YoloModel
+        - datasetManager : DatasetManager
+        + train() : void
+        + evaluate() : float
+    }
+
+    class DetectionService {
+        - model : YoloModel
+        + detect(image) : DetectionResult[ ]
+    }
+
+    ' Внутренние связи ML-логики
+    Trainer *-- YoloModel
+    Trainer *-- DatasetManager
+    DetectionService *-- YoloModel
+}
+
+package "Backend API" <<layer>> {
+
+    class AuthController {
+        + loginUser(formData) : Token
+        + loginAdmin(formData) : Token
+    }
+
+    class UserController {
+        + getUsers() : List
+        + getUser(id : int) : User
+    }
+
+    class StorageController {
+        + getStoredProducts(userId : int) : List
+        + addStoredProduct(data) : void
+        + deleteStoredProduct(id : int) : void
+    }
+
+    class FeedbackController {
+        + submitError(formData) : void
+        + getErrorReports() : List
+    }
+
+    class DetectionController {
+        + detectImage(imageData) : DetectionResult[ ]
+    }
+}  
+ 
+@enduml

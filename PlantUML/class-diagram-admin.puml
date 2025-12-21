@@ -1,0 +1,68 @@
+@startuml
+
+' ====================== ADMIN APP ======================
+
+package "Admin Repositories" <<layer>> {
+
+    class AdminUserRepository {
+        + getUsers() : List
+        + getUser(id : int) : User
+    }
+
+    class AdminErrorReportRepository {
+        + getAllReports() : List
+        + delete(id : int) : void
+    }
+
+    class AdminStatsRepository {
+        + getDetectionStats() : Map
+        + getStorageStats() : Map
+    }
+}
+
+package "Admin Logic" <<layer>> {
+
+    class AdminAuthService {
+        + login(email : String, password : String) : Admin
+        + logout() : void
+    }
+
+    class AdminModerationService {
+        + getReports() : List
+        + deleteReport(id : int) : void
+        + markResolved(id : int) : void
+    }
+
+    class AdminUserManagementService {
+        + getUsers() : List
+        + blockUser(id : int) : void
+    }
+
+    class AdminStatsService {
+        + getStats() : Map
+    }
+
+    ' При желании можно показать связи между сервисами, но не обязательно
+}
+
+package "Admin UI / Forms" <<layer>> {
+
+    class AdminLoginScreen {
+        + submitCredentials(email : String, password : String) : void
+    }
+
+    class UsersPage {
+        + showUsers(list : List) : void
+    }
+
+    class ErrorReportsPage {
+        + showReports(list : List) : void
+    }
+
+    class StatsPage {
+        + showStats(data : Map) : void
+    }
+}
+ 
+ 
+@enduml

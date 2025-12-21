@@ -1,0 +1,81 @@
+@startuml
+
+' ====================== MOBILE APP ======================
+
+package "Mobile Repositories" <<layer>> {
+
+    class MobileStoredProductRepository {
+        + getStoredProducts(userId : int) : List
+        + save(item : StoredProduct) : void
+        + delete(id : int) : void
+    }
+
+    class MobileScanSessionRepository {
+        + save(session : ScanSession) : void
+        + getSessions(userId : int) : List
+    }
+
+    class MobileErrorReportRepository {
+        + submit(report : ErrorReport, sample : FeedbackSample) : void
+        + getReports(userId : int) : List
+    }
+
+    ' Связей внутри слоя можно не рисовать — логика репозиториев очевидна
+}
+
+package "Mobile Logic & Helpers" <<layer>> {
+
+    class MobileAuthService {
+        + login(email : String, password : String) : User
+        + logout() : void
+    }
+
+    class MobileStorageService {
+        + placeToStorage(product : Product, date : Date) : StoredProduct
+        + removeFromStorage(id : int) : void
+        + listStoredProducts(userId : int) : List
+    }
+
+    class MobileScanService {
+        + startScan() : ScanSession
+        + processFrame(frame) : DetectionResult
+    }
+
+    class MobileErrorService {
+        + createErrorReport(session : ScanSession, comment : String) : ErrorReport
+    }
+
+    class YoloMobileModel {
+        - weightsPath : String
+        + loadWeights(path : String) : void
+        + infer(image) : DetectionResult[ ]
+    }
+
+    ' Внутренние связи слоя логики
+    MobileScanService *-- YoloMobileModel
+}
+
+package "Mobile UI / Forms" <<layer>> {
+
+    class LoginScreen {
+        + submitCredentials(email : String, password : String) : void
+    }
+
+    class ScanScreen {
+        + showCamera() : void
+        + highlightDate(result : DetectionResult) : void
+    }
+
+    class StorageScreen {
+        + showProducts(list : List) : void
+    }
+
+    class ErrorReportForm {
+        + send(comment : String) : void
+    }
+ 
+    ' Связи внутри UI-слоя не обязательны
+} 
+ 
+ 
+@enduml
