@@ -15,13 +15,12 @@ usecase "Авторизоваться" as UC_AuthUser
 usecase "Зарегистрироваться" as UC_Register
 
 usecase "Сообщить\nоб ошибке" as UC_Report
-usecase "Положить товар\nна хранение" as UC_Keep
-usecase "Просмотреть товары\nна хранении" as UC_KeepView
-usecase "Удалить товар\nс хранения" as UC_KeepDel
+usecase "Положить продукт\nна хранение" as UC_Keep
+usecase "Просмотреть продукты\nна хранении" as UC_KeepView
+usecase "Удалить продукт\nс хранения" as UC_KeepDel
 usecase "Получить дату\nизготовления" as UC_GetExprDate
 usecase "Отсканировать дату\nизготовления" as UC_ScanExprDate
 usecase "Ввести дату\nизготовления вручную" as UC_EnterExprDate
-usecase "Положить товар\nна хранение" as UC_Keep
 
 ' Админские кейсы
 usecase "Авторизоваться\nадминистратору" as UC_AuthAdmin
