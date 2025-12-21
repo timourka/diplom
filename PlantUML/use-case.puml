@@ -4,9 +4,11 @@ left to right direction
 actor "Неавторизованный\nпользователь" as UserNotAuf
 actor "Пользователь\nприложения" as User
 actor "Администратор\nсистемы" as Admin
+actor "Неавторизованный Администратор\nсистемы" as AdminNotAuf
 
 ' Наследование: авторизованный пользователь = частный случай неавторизованного
 UserNotAuf <|-- User
+AdminNotAuf <|-- Admin
 
 usecase "Сканировать\nупаковку" as UC_Scan
 usecase "Получить\nподсветку даты" as UC_Highlight
@@ -22,6 +24,7 @@ usecase "Получить дату\nизготовления" as UC_GetExprDate
 usecase "Отсканировать дату\nизготовления" as UC_ScanExprDate
 usecase "Ввести дату\nизготовления вручную" as UC_EnterExprDate
 
+usecase "Авторизоваться\nадминистратору" as UC_AuthAdmin
 ' Админские кейсы
 usecase "Запустить\nдообучение модели" as UC_Retrain
 usecase "Проанализировать\nстатистику качества" as UC_Stats
@@ -34,6 +37,8 @@ usecase "Удалить сообщения\nоб ошибках" as UC_MessageDe
 UserNotAuf "1" -- "*" UC_Register
 UserNotAuf "1" -- "1" UC_AuthUser
 UserNotAuf "1" -- "*" UC_Scan
+
+AdminNotAuf "1" -- "1" UC_AuthAdmin
 
 User "1" -- "*" UC_Report
 User "1" -- "*" UC_Keep
