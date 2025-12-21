@@ -23,7 +23,6 @@ usecase "Отсканировать дату\nизготовления" as UC_Sc
 usecase "Ввести дату\nизготовления вручную" as UC_EnterExprDate
 
 ' Админские кейсы
-usecase "Авторизоваться\nадминистратору" as UC_AuthAdmin
 usecase "Запустить\nдообучение модели" as UC_Retrain
 usecase "Проанализировать\nстатистику качества" as UC_Stats
 usecase "Просмотреть список\nпользователей" as UC_Users
@@ -35,7 +34,6 @@ usecase "Удалить сообщения\nоб ошибках" as UC_MessageDe
 UserNotAuf "1" -- "*" UC_Register
 UserNotAuf "1" -- "1" UC_AuthUser
 UserNotAuf "1" -- "*" UC_Scan
-UserNotAuf "1" -- "1" UC_AuthAdmin
 
 User "1" -- "*" UC_Report
 User "1" -- "*" UC_Keep
@@ -66,7 +64,7 @@ UC_Keep ..> UC_GetExprDate : <<include>>
 ' Получить дату можно двумя альтернативными сценариями
 UC_GetExprDate <|-- UC_ScanExprDate
 UC_GetExprDate <|-- UC_EnterExprDate
-' что бы отсканировать дату вначале нужно что бы её подсветило'
+' что бы отсканировать дату вначале нужно что бы её подсветило
 UC_ScanExprDate ..> UC_Highlight : <<include>>
 
 @enduml
