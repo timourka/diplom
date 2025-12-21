@@ -1,30 +1,73 @@
 @startuml
 left to right direction
 
+actor "Неавторизованный\nпользователь" as UserNotAuf
 actor "Пользователь\nприложения" as User
 actor "Администратор\nсистемы" as Admin
-actor "Подсистема\nобучения модели" as TrainingService
 
-rectangle "Система поиска даты\nна упаковке" as System {
-    usecase "Сканировать\nупаковку" as UC_Scan
-    usecase "Получить\nподсветку даты" as UC_Highlight
-    usecase "Сообщить\nоб ошибке" as UC_Report
-    usecase "Просмотреть\nисторию сканирований" as UC_History
+' Наследование: авторизованный пользователь = частный случай неавторизованного
+UserNotAuf <|-- User
 
-    usecase "Запустить\nдообучение модели" as UC_Retrain
-    usecase "Проанализировать\nстатистику качества" as UC_Stats
-}
+usecase "Сканировать\nупаковку" as UC_Scan
+usecase "Получить\nподсветку даты" as UC_Highlight
 
-User --> UC_Scan
-User --> UC_History
-User --> UC_Report
+usecase "Авторизоваться" as UC_AuthUser
+usecase "Зарегистрироваться" as UC_Register
 
-UC_Scan --> UC_Highlight : <<include>>
-UC_Highlight ..> UC_Report : <<extend>>
+usecase "Сообщить\nоб ошибке" as UC_Report
+usecase "Положить товар\nна хранение" as UC_Keep
+usecase "Просмотреть товары\nна хранении" as UC_KeepView
+usecase "Удалить товар\nс хранения" as UC_KeepDel
+usecase "Получить дату\nизготовления" as UC_GetExprDate
+usecase "Отсканировать дату\nизготовления" as UC_ScanExprDate
+usecase "Ввести дату\nизготовления вручную" as UC_EnterExprDate
+usecase "Положить товар\nна хранение" as UC_Keep
 
-Admin --> UC_Retrain
-Admin --> UC_Stats
+' Админские кейсы
+usecase "Авторизоваться\nадминистратору" as UC_AuthAdmin
+usecase "Запустить\nдообучение модели" as UC_Retrain
+usecase "Проанализировать\nстатистику качества" as UC_Stats
+usecase "Просмотреть список\nпользователей" as UC_Users
+usecase "Заблокировать\nпользователя" as UC_UserBlock
+usecase "Просмотреть сообщения\nоб ошибках" as UC_Messages
+usecase "Удалить сообщения\nоб ошибках" as UC_MessageDel
 
-UC_Retrain --> TrainingService : <<include>>
+' Ассоциации с кратностями (актер — 1, запусков use case — 0..*)
+UserNotAuf "1" -- "*" UC_Register
+UserNotAuf "1" -- "1" UC_AuthUser
+UserNotAuf "1" -- "*" UC_Scan
+UserNotAuf "1" -- "1" UC_AuthAdmin
+
+User "1" -- "*" UC_Report
+User "1" -- "*" UC_Keep
+User "1" -- "*" UC_KeepView
+
+Admin "1" -- "*" UC_Retrain
+Admin "1" -- "*" UC_Stats
+Admin "1" -- "*" UC_Users
+Admin "1" -- "*" UC_Messages
+
+' Подсветка даты всегда часть сценария сканирования
+UC_Scan ..> UC_Highlight : <<include>>
+
+' Пары "просмотр / удаление" и "просмотр / действие" – расширения
+
+' Сначала просмотр сообщений, уже из него можно удалять
+UC_MessageDel ..> UC_Messages : <<extend>>
+
+' Сначала список пользователей, потом из него можно блокировать
+UC_UserBlock ..> UC_Users : <<extend>>
+
+' Сначала просмотр товаров на хранении, потом можно удалять
+UC_KeepDel ..> UC_KeepView : <<extend>>
+
+' Положить на хранение обязательно включает получение даты
+UC_Keep ..> UC_GetExprDate : <<include>>
+
+' Получить дату можно двумя альтернативными сценариями
+UC_GetExprDate <|-- UC_ScanExprDate
+UC_GetExprDate <|-- UC_EnterExprDate
+' что бы отсканировать дату вначале нужно что бы её подсветило'
+UC_ScanExprDate ..> UC_Highlight : <<include>>
 
 @enduml
