@@ -1,4 +1,5 @@
 ~$*.docx
 ~$*.pptx
+~$*.xlsx
 ~*.tmp
 .ReviewSystem.vpp.lck
