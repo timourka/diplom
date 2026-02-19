@@ -1,0 +1,68 @@
+@startuml
+hide circle
+title ER-диаграмма системы (ошибка на уровне видео)
+
+entity "User" as User {
+    * id : int
+    --
+    email        : string
+    passwordHash : string
+    isBlocked    : bool
+    settings     : json
+}
+
+entity "Product" as Product {
+    * id : int
+    --
+    name         : string
+    manufacturer : string
+    barcode      : string
+}
+
+entity "StoredProduct" as StoredProduct {
+    * id : int
+    --
+    user_id        : int
+    product_id     : int
+    manufacture_at : date
+    expiry_at      : date
+    created_at     : datetime
+}
+
+entity "VideoSample" as VideoSample {
+    * id : int
+    --
+    video_path : string   -- путь к видеофайлу
+    source     : string   -- camera / file / test
+}
+
+entity "ModelVersion" as ModelVersion {
+    * id : int
+    --
+    trained_at : datetime
+    metrics    : string
+}
+
+entity "ErrorReport" as ErrorReport {
+    * id : int
+    --
+    user_id         : int
+    video_id        : int      -- к какому видео относится жалоба
+    model_version_id: int
+    comment         : string
+    created_at      : datetime
+    resolved        : bool
+}
+
+' --- Связи (1:M) ---
+
+User ||--o{ StoredProduct : "1:M"
+User ||--o{ ErrorReport   : "1:M"
+
+Product ||--o{ StoredProduct : "1:M"
+
+VideoSample ||--o{ ErrorReport : "1:M"
+
+ModelVersion ||--o{ ErrorReport : "1:M"
+
+@enduml
