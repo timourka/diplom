@@ -1,4 +1,71 @@
 ~$*.docx
 ~$*.pptx
+~$*.xlsx
 ~*.tmp
 .ReviewSystem.vpp.lck
+
+## Visual Studio / VS Code / .NET
+.vs/
+.vscode/
+
+## Build results
+[Bb]in/
+[Oo]bj/
+[Dd]ebug*/
+[Rr]elease*/
+x64/
+x86/
+[Aa]ny [Cc]pu/
+[Ll]og/
+[Ll]ogs/
+
+## User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.rsuser
+
+## Visual Studio Cache / IntelliSense
+*.VC.db
+*.VC.VC.opendb
+ipch/
+*.opendb
+*.sdf
+
+## NuGet
+*.nupkg
+*.snupkg
+**/packages/*
+!**/packages/build/
+!**/packages/repositories.config
+
+## .NET tools / artifacts
+artifacts/
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+*.pdb
+*.mdb
+
+## Rider / JetBrains
+.idea/
+*.sln.iml
+
+## OS junk
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+## Azure / publish
+*.pubxml
+*.publishproj
+PublishProfiles/
+publish/
+
+## Dotnet local settings
+appsettings.Development.json
+appsettings.Local.json
+secrets.json
