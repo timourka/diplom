@@ -1,0 +1,26 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: diplom
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  api:
+    build: .
+    environment:
+      FLASK_ENV: development
+      FLASK_DEBUG: "1"
+      # Внутри docker сети host=db
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/diplom
+    ports:
+      - "5000:5000"
+    depends_on:
+      - db
+
+volumes:
+  pgdata:

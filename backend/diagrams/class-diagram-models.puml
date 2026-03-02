@@ -1,0 +1,70 @@
+@startuml
+
+' ====================== MODELS (общий слой для всех) ======================
+package "Models" <<layer>> {
+
+    class User {
+        - id : int
+        - email : String
+        - passwordHash : String
+        - isBlocked : Boolean
+    }
+
+    class Admin {
+    }
+
+    User <|-- Admin
+
+    class Product {
+        - id : int
+        - name : String
+        - manufacturer : String
+    }
+
+    class StoredProduct {
+        - id : int
+        - manufactureDate : Date
+        - expiryDate : Date
+        - createdAt : DateTime
+    }
+
+    class ScanSession {
+        - id : int
+        - capturedAt : DateTime
+        - source : String
+    }
+
+    class ErrorReport {
+        - id : int
+        - comment : String
+        - createdAt : DateTime
+        - resolved : Boolean
+    }
+
+    class FeedbackSample {
+        + imagePath : String
+        + bbox : DetectionResult
+        + toYoloFormat() : String
+    }
+
+    class DetectionResult {
+        + x : int
+        + y : int
+        + width : int
+        + height : int
+        + confidence : float
+    }
+
+    ' Связи только внутри Models
+    User o-- StoredProduct
+    User o-- ScanSession
+    User o-- ErrorReport
+
+    StoredProduct o-- Product
+    ScanSession *-- DetectionResult
+    ErrorReport o-- ScanSession
+    FeedbackSample o-- DetectionResult 
+} 
+ 
+ 
+@enduml

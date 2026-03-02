@@ -1,0 +1,35 @@
+@startuml
+left to right direction
+title Диаграмма состояний бэкенд-сервера
+
+[*] --> Init
+
+state "Инициализация\nсервера" as Init
+state "Работа сервера" as Running
+state "Критическая ошибка" as Failed
+
+' --- Вложенные состояния при работе сервера ---
+state Running {
+    state "Ожидание\nзапросов" as Idle
+    state "Обработка\nзапроса API" as Handling
+    state "Обучение\nмодели" as Training
+
+    Idle --> Handling   : получен обычный запрос
+    Handling --> Idle   : ответ отправлен
+
+    Idle --> Training   : получена команда\nдообучить модель
+    Training --> Idle   : обучение завершено
+}
+
+' --- Внешние переходы ---
+Init --> Running      : инициализация успешна
+Init --> Failed       : ошибка инициализации
+
+Running --> Failed    : необработанное исключение
+Running --> [*]   : команда остановки
+
+Failed --> Init       : команда перезапуска
+Failed --> [*]    : команда остановки
+  
+
+@enduml
