@@ -3,9 +3,9 @@ import 'package:camera/camera.dart';
 
 import '../auth/auth_state.dart';
 import '../widgets/manual_add_sheet.dart';
+import 'error_dataset_flow_screen.dart';
 import 'login_screen.dart';
 import 'cabinet_screen.dart';
-import 'error_stub_screen.dart';
 
 class ScanScreen extends StatefulWidget {
   final AuthState auth;
@@ -68,7 +68,12 @@ class _ScanScreenState extends State<ScanScreen> {
 
   void _onError() {
     if (!widget.auth.isAuthed) return _goLogin(after: 'error');
-    Navigator.push(context, MaterialPageRoute(builder: (_) => const ErrorStubScreen()));
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ErrorDatasetFlowScreen(auth: widget.auth, cameras: widget.cameras),
+      ),
+    );
   }
 
   @override

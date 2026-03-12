@@ -2,8 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class ApiClient {
-  /// Android emulator -> host machine:
-  /// http://10.0.2.2:<port>
+  // Android emulator -> host machine:
   static const baseUrl = 'http://10.0.2.2:5099';
 
   final String? token;
@@ -11,7 +10,7 @@ class ApiClient {
 
   Map<String, String> _headers({bool auth = false}) {
     final h = {'Content-Type': 'application/json'};
-    if (auth && token != null && token!.isNotEmpty) {
+    if (auth && token != null) {
       h['Authorization'] = 'Bearer $token';
     }
     return h;
@@ -24,7 +23,7 @@ class ApiClient {
       body: jsonEncode({'email': email, 'password': password}),
     );
     if (r.statusCode != 200) throw Exception(r.body);
-    return (jsonDecode(r.body) as Map<String, dynamic>)['accessToken'] as String;
+    return jsonDecode(r.body)['accessToken'];
   }
 
   Future<String> login(String email, String password) async {
@@ -34,7 +33,7 @@ class ApiClient {
       body: jsonEncode({'email': email, 'password': password}),
     );
     if (r.statusCode != 200) throw Exception(r.body);
-    return (jsonDecode(r.body) as Map<String, dynamic>)['accessToken'] as String;
+    return jsonDecode(r.body)['accessToken'];
   }
 
   Future<Map<String, dynamic>> me() async {
@@ -43,7 +42,7 @@ class ApiClient {
       headers: _headers(auth: true),
     );
     if (r.statusCode != 200) throw Exception(r.body);
-    return jsonDecode(r.body) as Map<String, dynamic>;
+    return jsonDecode(r.body);
   }
 
   Future<List<dynamic>> products() async {
@@ -52,7 +51,7 @@ class ApiClient {
       headers: _headers(),
     );
     if (r.statusCode != 200) throw Exception(r.body);
-    return jsonDecode(r.body) as List<dynamic>;
+    return jsonDecode(r.body);
   }
 
   Future<List<dynamic>> storage() async {
@@ -61,7 +60,7 @@ class ApiClient {
       headers: _headers(auth: true),
     );
     if (r.statusCode != 200) throw Exception(r.body);
-    return jsonDecode(r.body) as List<dynamic>;
+    return jsonDecode(r.body);
   }
 
   Future<void> addStoredProduct(int productId, DateTime? expiryAt) async {
@@ -75,5 +74,23 @@ class ApiClient {
       }),
     );
     if (r.statusCode != 200) throw Exception(r.body);
+  }
+
+  Future<void> uploadDatasetZip(String zipPath, {String comment = ''}) async {
+    final uri = Uri.parse('$baseUrl/api/error-reports/upload-dataset');
+    final req = http.MultipartRequest('POST', uri);
+
+    if (token != null) {
+      req.headers['Authorization'] = 'Bearer $token';
+    }
+    req.fields['comment'] = comment;
+
+    req.files.add(await http.MultipartFile.fromPath('datasetZip', zipPath));
+
+    final res = await req.send();
+    final body = await res.stream.bytesToString();
+    if (res.statusCode != 200 && res.statusCode != 201) {
+      throw Exception(body);
+    }
   }
 }
