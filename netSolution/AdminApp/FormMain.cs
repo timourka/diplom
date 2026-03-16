@@ -1,20 +1,52 @@
-﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
-using System.Drawing;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using System.Windows.Forms;
+﻿namespace AdminApp;
 
-namespace AdminApp
+public partial class FormMain : Form
 {
-    public partial class FormMain : Form
+    private readonly string _token;
+    private readonly AdminApiClient _api;
+
+    public FormMain(string token)
     {
-        public FormMain()
+        InitializeComponent();
+
+        _token = token;
+        _api = new AdminApiClient("http://localhost:5099/", _token);
+
+        Text = "Админка";
+        Width = 500;
+        Height = 250;
+        StartPosition = FormStartPosition.CenterScreen;
+
+        BuildUi();
+    }
+
+    private void BuildUi()
+    {
+        Controls.Clear();
+
+        var lblTitle = new Label
         {
-            InitializeComponent();
-        }
+            Text = "Панель администратора",
+            AutoSize = true,
+            Font = new Font("Segoe UI", 16, FontStyle.Bold),
+            Location = new Point(20, 20)
+        };
+
+        var btnErrorReports = new Button
+        {
+            Text = "Сообщения об ошибках",
+            Width = 220,
+            Height = 50,
+            Location = new Point(20, 80)
+        };
+
+        btnErrorReports.Click += (_, _) =>
+        {
+            var form = new FormErrorReports(_api);
+            form.ShowDialog(this);
+        };
+
+        Controls.Add(lblTitle);
+        Controls.Add(btnErrorReports);
     }
 }

@@ -1,17 +1,16 @@
-namespace AdminApp
+namespace AdminApp;
+
+internal static class Program
 {
-    internal static class Program
+    [STAThread]
+    static void Main()
     {
-        /// <summary>
-        ///  The main entry point for the application.
-        /// </summary>
-        [STAThread]
-        static void Main()
+        ApplicationConfiguration.Initialize();
+
+        using var loginForm = new FormLogin();
+        if (loginForm.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(loginForm.Token))
         {
-            // To customize application configuration such as set high DPI settings or default font,
-            // see https://aka.ms/applicationconfiguration.
-            ApplicationConfiguration.Initialize();
-            Application.Run(new FormMain());
+            Application.Run(new FormMain(loginForm.Token));
         }
     }
 }

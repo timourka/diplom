@@ -86,7 +86,9 @@ public class ErrorReportsDatasetController : ControllerBase
             VideoId = vs.Id,
             Comment = string.IsNullOrWhiteSpace(comment) ? null : comment.Trim(),
             CreatedAt = DateTime.UtcNow,
-            Resolved = false
+            Resolved = false,
+            Approved = false,
+            FramesCount = imagesCount
         };
         _db.ErrorReports.Add(report);
         await _db.SaveChangesAsync(ct);
