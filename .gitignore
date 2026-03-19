@@ -71,5 +71,6 @@ appsettings.Local.json
 secrets.json
 /training_service/data/
 dataset.zip
+dataset
 runs
 netSolution/ProductsDateAPI/uploads/
