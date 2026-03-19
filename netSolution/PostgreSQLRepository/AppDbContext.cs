@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Models.Entities;
 
 namespace PostgreSQLRepository;
@@ -24,6 +24,10 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<Product>()
             .HasIndex(x => x.Barcode);
+
+        modelBuilder.Entity<ModelVersion>()
+            .HasIndex(x => x.ExternalJobId)
+            .IsUnique();
 
         modelBuilder.Entity<StoredProduct>()
             .HasOne(x => x.User)

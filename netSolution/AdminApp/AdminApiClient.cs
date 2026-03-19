@@ -1,4 +1,4 @@
-﻿using System.Net.Http.Headers;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -92,6 +92,26 @@ public class AdminApiClient
 
         response.EnsureSuccessStatusCode();
     }
+
+    public async Task<TrainingJobStartResponse> StartTrainingAsync(StartTrainingRequest request, CancellationToken ct = default)
+    {
+        using var response = await _http.PostAsJsonAsync("api/admin/training/start", request, ct);
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content.ReadFromJsonAsync<TrainingJobStartResponse>(_jsonOptions, ct);
+        return result ?? throw new Exception("Пустой ответ от сервера.");
+    }
+
+    public async Task<List<TrainingJobStatusResponse>> GetTrainingJobsAsync(CancellationToken ct = default)
+    {
+        var result = await _http.GetFromJsonAsync<List<TrainingJobStatusResponse>>(
+            "api/admin/training/jobs", _jsonOptions, ct);
+
+        return result ?? new List<TrainingJobStatusResponse>();
+    }
+
+    public async Task<TrainingJobStatusResponse?> GetTrainingJobAsync(string jobId, CancellationToken ct = default)
+        => await _http.GetFromJsonAsync<TrainingJobStatusResponse>($"api/admin/training/jobs/{jobId}", _jsonOptions, ct);
 
     public static async Task<string> LoginAsync(string baseUrl, string email, string password, CancellationToken ct = default)
     {

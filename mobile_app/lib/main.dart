@@ -1,6 +1,8 @@
-import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
+import 'package:flutter/material.dart';
 
+import 'api/api_config.dart';
+import 'api/model_sync_service.dart';
 import 'auth/auth_state.dart';
 import 'screens/scan_screen.dart';
 
@@ -9,10 +11,14 @@ late final List<CameraDescription> cameras;
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  await ApiConfig.load();
   cameras = await availableCameras();
 
   final auth = AuthState();
   await auth.load();
+
+  final modelSync = ModelSyncService();
+  await modelSync.trySyncLatestModel();
 
   runApp(MyApp(auth: auth));
 }

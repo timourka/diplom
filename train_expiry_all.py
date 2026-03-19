@@ -8,7 +8,8 @@ def main():
         epochs=50,
         imgsz=640,
         batch=16,
-        name="expiry_all"
+        name="expiry_all",
+        device = 0
     )
 
 if __name__ == "__main__":

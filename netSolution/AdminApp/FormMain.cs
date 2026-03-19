@@ -1,4 +1,4 @@
-﻿namespace AdminApp;
+namespace AdminApp;
 
 public partial class FormMain : Form
 {
@@ -13,8 +13,8 @@ public partial class FormMain : Form
         _api = new AdminApiClient("http://localhost:5099/", _token);
 
         Text = "Админка";
-        Width = 500;
-        Height = 250;
+        Width = 540;
+        Height = 320;
         StartPosition = FormStartPosition.CenterScreen;
 
         BuildUi();
@@ -46,7 +46,22 @@ public partial class FormMain : Form
             form.ShowDialog(this);
         };
 
+        var btnTraining = new Button
+        {
+            Text = "Обучение модели",
+            Width = 220,
+            Height = 50,
+            Location = new Point(260, 80)
+        };
+
+        btnTraining.Click += (_, _) =>
+        {
+            using var form = new FormTraining(_api);
+            form.ShowDialog(this);
+        };
+
         Controls.Add(lblTitle);
         Controls.Add(btnErrorReports);
+        Controls.Add(btnTraining);
     }
 }
