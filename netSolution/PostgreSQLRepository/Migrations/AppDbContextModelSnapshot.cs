@@ -30,12 +30,18 @@ namespace PostgreSQLRepository.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
+                    b.Property<bool>("Approved")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("Comment")
                         .HasMaxLength(2000)
                         .HasColumnType("character varying(2000)");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("FramesCount")
+                        .HasColumnType("integer");
 
                     b.Property<int?>("ModelVersionId")
                         .HasColumnType("integer");

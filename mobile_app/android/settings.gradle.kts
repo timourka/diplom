@@ -16,7 +16,16 @@ pluginManagement {
         gradlePluginPortal()
     }
 }
-
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+    repositories {
+        google()
+        mavenCentral()
+        maven(url = "https://storage.googleapis.com/download.flutter.io")
+        maven(url = "https://jitpack.io")
+        // НЕ добавляй maven.arthenica.com
+    }
+}
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
     id("com.android.application") version "8.11.1" apply false

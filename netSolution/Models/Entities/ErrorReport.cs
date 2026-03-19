@@ -21,4 +21,7 @@ public class ErrorReport : BaseEntity
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public bool Resolved { get; set; } = false;
+
+    public bool Approved { get; set; } = false;
+    public int FramesCount { get; set; } = 0;
 }
