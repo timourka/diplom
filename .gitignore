@@ -69,4 +69,6 @@ publish/
 appsettings.Development.json
 appsettings.Local.json
 secrets.json
-/training_service/data/jobs/dd9506f479f742f0b39cd0b22d0ee8c7
+/training_service/data/
+dataset.zip
+
