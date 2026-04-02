@@ -102,7 +102,7 @@ class _ScanScreenState extends State<ScanScreen> {
     setState(() {
       _aiReady = ready;
       _aiStatus = ready
-          ? 'ИИ готова. Анализ кадра идёт в фоне, превью камеры не должно тормозить.'
+          ? 'ИИ готова.'
           : 'Локальная модель не найдена. Зайди в настройки и обнови версию ИИ.';
     });
 
