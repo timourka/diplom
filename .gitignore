@@ -74,3 +74,4 @@ dataset.zip
 dataset
 runs
 netSolution/ProductsDateAPI/uploads/
+*.vpp.lck
