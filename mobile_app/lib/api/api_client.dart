@@ -1,12 +1,13 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
-class ApiClient {
-  // Android emulator -> host machine:
-  static const baseUrl = 'http://10.0.2.2:5099';
+import 'api_config.dart';
 
+class ApiClient {
   final String? token;
   ApiClient({required this.token});
+
+  static String get baseUrl => ApiConfig.baseUrl;
 
   Map<String, String> _headers({bool auth = false}) {
     final h = {'Content-Type': 'application/json'};

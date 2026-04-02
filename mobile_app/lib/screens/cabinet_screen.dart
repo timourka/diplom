@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
-import '../auth/auth_state.dart';
+
 import '../api/api_client.dart';
+import '../auth/auth_state.dart';
 import '../widgets/manual_add_sheet.dart';
+import 'settings_screen.dart';
 
 class CabinetScreen extends StatefulWidget {
   final AuthState auth;
@@ -49,12 +51,24 @@ class _CabinetScreenState extends State<CabinetScreen> {
     await _load();
   }
 
+  Future<void> _openSettings() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const SettingsScreen()),
+    );
+    await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Личный кабинет'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: _openSettings,
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _load,
@@ -80,6 +94,7 @@ class _CabinetScreenState extends State<CabinetScreen> {
                   padding: const EdgeInsets.all(16),
                   children: [
                     ExpansionTile(
+                      initiallyExpanded: true,
                       title: const Text('Данные профиля'),
                       children: [
                         ListTile(
@@ -89,6 +104,12 @@ class _CabinetScreenState extends State<CabinetScreen> {
                         ListTile(
                           title: const Text('Id'),
                           subtitle: Text(_me?['id']?.toString() ?? ''),
+                        ),
+                        ListTile(
+                          title: const Text('Настройки'),
+                          subtitle: const Text('BaseUrl, версия ИИ и обновление модели'),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: _openSettings,
                         ),
                       ],
                     ),

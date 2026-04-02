@@ -3,15 +3,15 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using PostgreSQLRepository;
+using ProductsDateAPI.Models;
 using ProductsDateAPI.Security;
+using ProductsDateAPI.Services;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
-
 builder.Services.AddControllers();
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
@@ -22,6 +22,11 @@ builder.Services.AddDbContext<AppDbContext>(opt =>
 // Репозитории
 builder.Services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
 builder.Services.AddScoped<StoredProductRepository>();
+
+// Training pipeline
+builder.Services.Configure<TrainingServiceOptions>(builder.Configuration.GetSection("TrainingService"));
+builder.Services.AddScoped<TrainingDatasetPackager>();
+builder.Services.AddHttpClient<TrainingServiceClient>();
 
 // JWT
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
@@ -58,7 +63,6 @@ builder.Services.AddCors(opt =>
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -66,7 +70,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-
+app.UseCors("Default");
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
