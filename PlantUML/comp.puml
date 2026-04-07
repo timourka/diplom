@@ -1,60 +1,59 @@
 @startuml
-title Диаграмма компонентов системы по слоям
+title Актуализированная диаграмма компонентов системы по слоям
+skinparam componentStyle rectangle
+skinparam shadowing false
+left to right direction
 
 ' ================== CLIENT LAYER ==================
 package "Client layer" {
-
   component "mobile_app.apk" <<executable>> as MobileClient
   component "admin_client.exe" <<executable>> as AdminClient
+  artifact "local_mobile_model.tflite" <<artifact>> as LocalMobileModel
 }
 
 ' ================== SERVER LAYER ==================
 package "Server layer" {
-
-  component "backend_api.exe" <<executable>> as BackendAPI
-  component "detection_service.exe" <<executable>> as DetectionService
-  component "training_service.exe" <<executable>> as TrainingService
-  component "annotation_tool.exe" <<executable>> as AnnotationTool
+  component "ProductsDateAPI" <<ASP.NET Core Web API>> as BackendAPI
+  component "training_service.py" <<FastAPI service>> as TrainingService
 }
 
-' ================== DATA LAYER ==================
-package "Data layer" {
-
-  database "products.db" <<table>> as DB
+' ================== DATA / STORAGE LAYER ==================
+package "Data & storage layer" {
+  database "PostgreSQL" as DB
+  folder "backend file storage\n(videos, extracted frames, temp dataset.zip)" as BackendStorage
+  folder "training jobs storage\n(dataset, runs, weights, metrics, mobile artifacts)" as TrainingStorage
 }
 
 ' ================== EXTERNAL LIBRARIES ==================
-package "External libraries" {
-
-  component "yolo.dll" <<library>> as YOLO
-  component "yolo_mobile.tflite" <<library>> as YOLOMobile
-  component "opencv.dll" <<library>> as OpenCV
-  component "fastapi.py" <<file>> as WebFramework
-  component "android_camera.dll" <<library>> as MobileSDK
+package "External libraries / runtime" {
+  component "Android Camera API" <<platform SDK>> as MobileSDK
+  component "TFLite Runtime" <<library>> as TFLiteRuntime
+  component "ASP.NET Core + EF Core + Npgsql" <<framework>> as DotNetRuntime
+  component "FastAPI + Uvicorn" <<framework>> as FastApiRuntime
+  component "Ultralytics YOLO + PyTorch" <<ML framework>> as YOLO
 }
 
-' ============ ЗАВИСИМОСТИ МЕЖДУ КОМПОНЕНТАМИ ============
+' ============ CLIENT INTERACTIONS ============
+MobileClient ..> BackendAPI : HTTPS REST\n/auth, /products, /storage,\n/error-reports, /mobile-models
+AdminClient  ..> BackendAPI : HTTPS REST\n/api/admin/*
 
-' Клиенты -> сервер
-MobileClient ..> BackendAPI : HTTPS REST
-AdminClient  ..> BackendAPI : HTTPS REST
+MobileClient ..> MobileSDK : camera frames / media access
+MobileClient ..> TFLiteRuntime : local inference
+MobileClient ..> LocalMobileModel : load latest mobile model
 
-' Внутри серверного слоя
-BackendAPI  ..> DetectionService : вызовы детекции
-BackendAPI  ..> DB               : SQL-запросы
-BackendAPI  ..> WebFramework     : обработка HTTP\nмаршрутизация
+' ============ BACKEND INTERACTIONS ============
+BackendAPI ..> DB : EF Core / SQL
+BackendAPI ..> BackendStorage : save videos, frames, temp archives
+BackendAPI ..> TrainingService : HTTP + X-Api-Key\nstart job / get status / download artifacts
+BackendAPI ..> DotNetRuntime : hosting / controllers / DI
 
-DetectionService ..> YOLO   : инференс модели
-DetectionService ..> OpenCV : обработка изображений
+' ============ TRAINING SERVICE INTERACTIONS ============
+TrainingService ..> TrainingStorage : jobs, datasets, weights,\nmetrics, exported mobile model
+TrainingService ..> YOLO : train / validate / export
+TrainingService ..> FastApiRuntime : REST endpoints
 
-TrainingService  ..> DB     : датасет и метрики
-TrainingService  ..> YOLO   : обучение / дообучение
-TrainingService  ..> OpenCV : аугментации
-
-AnnotationTool   ..> DB     : чтение/запись разметки
-
-' Клиент -> системные библиотеки платформы и мобильная YOLO
-MobileClient ..> MobileSDK   : доступ к камере и медиа
-MobileClient ..> YOLOMobile  : офлайн-детекция даты\nна устройстве
+' ============ MODEL DELIVERY ============
+TrainingService ..> BackendAPI : mobile artifact downloaded\nby backend through /jobs/{id}/artifacts/mobile
+BackendAPI ..> LocalMobileModel : latest model download\n/api/mobile-models/latest/download
 
 @enduml
