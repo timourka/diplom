@@ -13,6 +13,7 @@ import '../widgets/manual_add_sheet.dart';
 import 'cabinet_screen.dart';
 import 'error_dataset_flow_screen.dart';
 import 'login_screen.dart';
+import 'settings_screen.dart';
 
 class ScanScreen extends StatefulWidget {
   final AuthState auth;
@@ -123,7 +124,7 @@ class _ScanScreenState extends State<ScanScreen> {
       }
 
       final now = DateTime.now();
-      if (now.difference(_lastInferenceStarted).inMilliseconds < 500) {
+      if (now.difference(_lastInferenceStarted).inMilliseconds < 1000) {
         return;
       }
       _lastInferenceStarted = now;
@@ -161,6 +162,12 @@ class _ScanScreenState extends State<ScanScreen> {
                 'Время анализа: ${totalDuration.inMilliseconds} мс.';
           }
         });
+      } on TimeoutException {
+        if (!mounted) return;
+        setState(() {
+          _lastPerf = const FramePerf();
+          _aiStatus = 'Кадр пропущен: ИИ не успела завершить анализ вовремя.';
+        });
       } catch (e) {
         if (!mounted) return;
         setState(() {
@@ -186,6 +193,14 @@ class _ScanScreenState extends State<ScanScreen> {
       MaterialPageRoute(builder: (_) => LoginScreen(auth: widget.auth, after: after)),
     );
     setState(() {});
+  }
+
+  void _openSettings() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const SettingsScreen()),
+    );
+    await _refreshAiState();
   }
 
   void _onProfile() async {
@@ -354,12 +369,27 @@ class _ScanScreenState extends State<ScanScreen> {
               alignment: Alignment.topRight,
               child: Padding(
                 padding: const EdgeInsets.all(12),
-                child: GestureDetector(
-                  onTap: _onProfile,
-                  child: CircleAvatar(
-                    radius: 20,
-                    child: Icon(widget.auth.isAuthed ? Icons.person : Icons.login),
-                  ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircleAvatar(
+                      radius: 20,
+                      child: IconButton(
+                        padding: EdgeInsets.zero,
+                        onPressed: _openSettings,
+                        icon: const Icon(Icons.settings, size: 20),
+                        tooltip: 'Настройки API',
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: _onProfile,
+                      child: CircleAvatar(
+                        radius: 20,
+                        child: Icon(widget.auth.isAuthed ? Icons.person : Icons.login),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),

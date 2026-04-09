@@ -153,6 +153,10 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
 
       setState(() {
         _frames = files;
+        debugPrint('EXTRACTED FRAMES: ${files.length}');
+        for (final f in files.take(10)) {
+          debugPrint('FRAME: ${f.path}');
+        }
         _index = 0;
         _status = 'Кадры готовы: ${files.length}. Размечай по очереди.';
       });
@@ -214,20 +218,44 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
     final root = _workDir!;
     final zipPath = '${root.path}/dataset.zip';
 
-    // Ensure all labels exist
     for (var i = 0; i < _frames.length; i++) {
-      if (!_bboxes.containsKey(i)) throw Exception('Не все кадры размечены.');
+      if (!_bboxes.containsKey(i)) {
+        throw Exception('Не все кадры размечены.');
+      }
+
       final txt = File('${_labelsDir!.path}/${_frameName(i).replaceAll('.jpg', '.txt')}');
       if (!await txt.exists()) {
         await _writeYoloLabel(i, _bboxes[i]!);
       }
     }
 
+    final imageFiles = _imagesDir!
+        .listSync()
+        .whereType<File>()
+        .where((f) => f.path.toLowerCase().endsWith('.jpg'))
+        .toList()
+      ..sort((a, b) => a.path.compareTo(b.path));
+
+    final labelFiles = _labelsDir!
+        .listSync()
+        .whereType<File>()
+        .where((f) => f.path.toLowerCase().endsWith('.txt'))
+        .toList()
+      ..sort((a, b) => a.path.compareTo(b.path));
+
+    debugPrint('ZIP INPUT IMAGES FINAL: ${imageFiles.length}');
+    debugPrint('ZIP INPUT LABELS FINAL: ${labelFiles.length}');
+
     final encoder = ZipFileEncoder();
     encoder.create(zipPath);
 
-    encoder.addDirectory(_imagesDir!, includeDirName: true); // images/
-    encoder.addDirectory(_labelsDir!, includeDirName: true); // labels/
+    for (final f in imageFiles) {
+      encoder.addFile(f, 'images/${f.uri.pathSegments.last}');
+    }
+
+    for (final f in labelFiles) {
+      encoder.addFile(f, 'labels/${f.uri.pathSegments.last}');
+    }
 
     final meta = File('${root.path}/meta.json');
     await meta.writeAsString(
@@ -235,8 +263,14 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
       flush: true,
     );
     encoder.addFile(meta, 'meta.json');
+
     encoder.close();
 
+    final zipCheck = ZipDecoder().decodeBytes(await File(zipPath).readAsBytes());
+    debugPrint('ZIP ENTRIES COUNT: ${zipCheck.files.length}');
+    for (final entry in zipCheck.files) {
+      debugPrint('ZIP ENTRY: ${entry.name}');
+    }
     return zipPath;
   }
 

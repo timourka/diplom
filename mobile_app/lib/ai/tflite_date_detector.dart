@@ -163,7 +163,7 @@ class TfliteDateDetector {
     });
 
     try {
-      return await completer.future.timeout(const Duration(seconds: 8));
+      return await completer.future.timeout(const Duration(seconds: 12));
     } finally {
       _pendingRequests.remove(requestId);
     }

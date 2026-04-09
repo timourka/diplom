@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import '../auth/auth_state.dart';
 import '../api/api_client.dart';
+import '../api/api_config.dart';
 import 'register_screen.dart';
+import 'settings_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   final AuthState auth;
@@ -18,6 +20,14 @@ class _LoginScreenState extends State<LoginScreen> {
 
   String? _error;
   bool _loading = false;
+
+  Future<void> _openSettings() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const SettingsScreen()),
+    );
+    if (mounted) setState(() {});
+  }
 
   Future<void> _login() async {
     setState(() {
@@ -48,7 +58,16 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Авторизация')),
+      appBar: AppBar(
+        title: const Text('Авторизация'),
+        actions: [
+          IconButton(
+            onPressed: _openSettings,
+            icon: const Icon(Icons.settings),
+            tooltip: 'Настройки API',
+          ),
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -62,6 +81,19 @@ class _LoginScreenState extends State<LoginScreen> {
               controller: _pass,
               decoration: const InputDecoration(labelText: 'Пароль'),
               obscureText: true,
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                leading: const Icon(Icons.lan),
+                title: const Text('Адрес API'),
+                subtitle: Text(ApiConfig.baseUrl),
+                trailing: TextButton(
+                  onPressed: _loading ? null : _openSettings,
+                  child: const Text('Изменить'),
+                ),
+              ),
             ),
             const SizedBox(height: 12),
             if (_error != null) Text(_error!, style: const TextStyle(color: Colors.red)),
