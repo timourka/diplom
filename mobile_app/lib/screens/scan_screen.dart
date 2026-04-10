@@ -214,11 +214,16 @@ class _ScanScreenState extends State<ScanScreen> {
 
   void _onManualAdd() async {
     if (!widget.auth.isAuthed) return _goLogin(after: 'manual');
-    await showModalBottomSheet(
+    final added = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       builder: (_) => ManualAddSheet(auth: widget.auth),
     );
+    if (added == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Продукт добавлен в личный кабинет')),
+      );
+    }
   }
 
   void _onError() {

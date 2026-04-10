@@ -113,6 +113,15 @@ public class AdminApiClient
     public async Task<TrainingJobStatusResponse?> GetTrainingJobAsync(string jobId, CancellationToken ct = default)
         => await _http.GetFromJsonAsync<TrainingJobStatusResponse>($"api/admin/training/jobs/{jobId}", _jsonOptions, ct);
 
+    public async Task<TrainingJobStatusResponse> CancelTrainingJobAsync(string jobId, CancellationToken ct = default)
+    {
+        using var response = await _http.PostAsync($"api/admin/training/jobs/{jobId}/cancel", content: null, ct);
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content.ReadFromJsonAsync<TrainingJobStatusResponse>(_jsonOptions, ct);
+        return result ?? throw new Exception("Пустой ответ от сервера при остановке задачи.");
+    }
+
     public static async Task<string> LoginAsync(string baseUrl, string email, string password, CancellationToken ct = default)
     {
         using var http = new HttpClient { BaseAddress = new Uri(baseUrl) };

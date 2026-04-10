@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
-import threading
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -12,12 +12,13 @@ from pathlib import Path
 from typing import Any
 from zipfile import ZipFile
 
+import psutil
+import torch
+import yaml
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from ultralytics import YOLO
-import torch
-import yaml
 
 APP_ROOT = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.getenv("TRAINING_SERVICE_DATA", APP_ROOT / "data"))
@@ -41,6 +42,7 @@ class JobState(BaseModel):
     mobileModelPath: str | None = None
     mobileFormat: str | None = None
     metricsJson: str | None = None
+    processId: int | None = None
     workDir: str
 
 
@@ -179,7 +181,13 @@ async def start_train_job(
     save_state(state)
     save_config(job_id, config)
 
-    threading.Thread(target=run_job, args=(job_id,), daemon=True).start()
+    process = subprocess.Popen(
+        [sys.executable, str(APP_ROOT / "job_runner.py"), job_id],
+        cwd=str(APP_ROOT),
+    )
+    state.processId = process.pid
+    state.message = f"Job created and queued in separate process pid={process.pid}"
+    save_state(state)
 
     return {
         "jobId": job_id,
@@ -194,6 +202,31 @@ def get_job(job_id: str) -> dict[str, Any]:
     state = load_state(job_id)
     if state is None:
         raise HTTPException(status_code=404, detail="Job not found")
+    return state.model_dump()
+
+
+@app.post("/jobs/{job_id}/cancel", dependencies=[Depends(require_api_key)])
+def cancel_job(job_id: str) -> dict[str, Any]:
+    state = load_state(job_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if state.status in {"completed", "failed", "canceled"}:
+        return state.model_dump()
+
+    process_stopped = False
+    if state.processId:
+        process_stopped = terminate_process_tree(state.processId)
+
+    state.status = "canceled"
+    state.finishedAt = now_utc()
+    state.message = (
+        f"Training job canceled by request. Process pid={state.processId} was stopped."
+        if process_stopped
+        else "Training job canceled by request. Process was already not running."
+    )
+    state.processId = None
+    save_state(state)
     return state.model_dump()
 
 
@@ -229,6 +262,9 @@ def run_job(job_id: str) -> None:
     if state is None:
         return
 
+    if state.status == "canceled":
+        return
+
     config = load_config(job_id)
     if config is None:
         state.status = "failed"
@@ -239,6 +275,7 @@ def run_job(job_id: str) -> None:
 
     try:
         state.status = "running"
+        state.processId = os.getpid()
         resolved_device = resolve_train_device(config.device)
         state.message = f"Training started with requested device={config.device}, effective device={resolved_device or 'ultralytics-auto'}"
         state.startedAt = now_utc()
@@ -269,6 +306,10 @@ def run_job(job_id: str) -> None:
         if resolved_device is not None:
             train_kwargs["device"] = resolved_device
         train_result = model.train(**train_kwargs)
+
+        state = load_state(job_id) or state
+        if state.status == "canceled":
+            return
 
         save_dir = Path(getattr(train_result, "save_dir", runs_dir / "expiry_all"))
         best_pt = save_dir / "weights" / "best.pt"
@@ -309,12 +350,45 @@ def run_job(job_id: str) -> None:
         state.status = "completed"
         state.message = f"Training and mobile export completed on device={resolved_device}"
         state.finishedAt = now_utc()
+        state.processId = None
         save_state(state)
     except Exception as exc:  # pragma: no cover - defensive path
+        state = load_state(job_id) or state
+        if state.status == "canceled":
+            return
         state.status = "failed"
         state.finishedAt = now_utc()
+        state.processId = None
         state.message = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
         save_state(state)
+
+
+def terminate_process_tree(pid: int) -> bool:
+    try:
+        process = psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        return False
+
+    children = process.children(recursive=True)
+    for child in children:
+        try:
+            child.terminate()
+        except psutil.NoSuchProcess:
+            pass
+
+    try:
+        process.terminate()
+    except psutil.NoSuchProcess:
+        return False
+
+    gone, alive = psutil.wait_procs([*children, process], timeout=5)
+    for proc in alive:
+        try:
+            proc.kill()
+        except psutil.NoSuchProcess:
+            pass
+
+    return True
 
 
 def resolve_train_device(requested: str | None) -> str | None:

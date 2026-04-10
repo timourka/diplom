@@ -43,12 +43,19 @@ class _CabinetScreenState extends State<CabinetScreen> {
   }
 
   Future<void> _openManualAdd() async {
-    await showModalBottomSheet(
+    final added = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       builder: (_) => ManualAddSheet(auth: widget.auth),
     );
-    await _load();
+    if (added == true) {
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Продукт добавлен в личный кабинет')),
+        );
+      }
+    }
   }
 
   Future<void> _openSettings() async {
@@ -123,12 +130,15 @@ class _CabinetScreenState extends State<CabinetScreen> {
                       const Text('Пока пусто. Добавь продукт вручную (+).'),
                     ..._storage.map((x) {
                       final product = x['product'];
-                      final name = product?['name']?.toString() ?? 'Product';
-                      final expiry = x['expiryAt']?.toString() ?? '-';
+                      final name = product?['name']?.toString() ?? 'Без названия';
+                      final rawExpiry = x['expiryAt']?.toString();
+                      final expiry = (rawExpiry == null || rawExpiry.isEmpty)
+                          ? '-'
+                          : rawExpiry.split('T').first;
                       return Card(
                         child: ListTile(
                           title: Text(name),
-                          subtitle: Text('Expiry: $expiry'),
+                          subtitle: Text('Срок годности: $expiry'),
                         ),
                       );
                     }),

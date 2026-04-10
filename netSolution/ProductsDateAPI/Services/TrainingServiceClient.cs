@@ -68,6 +68,15 @@ public class TrainingServiceClient
     public async Task<TrainingJobStatusResponse?> GetJobAsync(string jobId, CancellationToken ct = default)
         => await _http.GetFromJsonAsync<TrainingJobStatusResponse>($"jobs/{jobId}", _jsonOptions, ct);
 
+    public async Task<TrainingJobStatusResponse> CancelJobAsync(string jobId, CancellationToken ct = default)
+    {
+        using var response = await _http.PostAsync($"jobs/{jobId}/cancel", content: null, ct);
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content.ReadFromJsonAsync<TrainingJobStatusResponse>(_jsonOptions, ct);
+        return result ?? throw new InvalidOperationException("Training service returned empty response for cancel.");
+    }
+
     public async Task<(byte[] Bytes, string? ContentType, string? FileName)> DownloadArtifactAsync(
         string jobId,
         string artifact,
