@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import '../auth/auth_state.dart';
+
 import '../api/api_client.dart';
+import '../auth/auth_state.dart';
 
 class ManualAddSheet extends StatefulWidget {
   final AuthState auth;
@@ -11,28 +12,16 @@ class ManualAddSheet extends StatefulWidget {
 }
 
 class _ManualAddSheetState extends State<ManualAddSheet> {
-  List<dynamic> _products = [];
-  int? _productId;
+  final _nameController = TextEditingController();
   DateTime? _expiry;
 
   String? _error;
-  bool _loading = true;
-
-  Future<void> _loadProducts() async {
-    try {
-      final api = ApiClient(token: widget.auth.token);
-      _products = await api.products();
-    } catch (e) {
-      _error = e.toString();
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
+  bool _saving = false;
 
   @override
-  void initState() {
-    super.initState();
-    _loadProducts();
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
   }
 
   Future<void> _pickDate() async {
@@ -47,19 +36,32 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
   }
 
   Future<void> _save() async {
-    if (_productId == null) {
-      setState(() => _error = 'Выбери продукт');
+    final productName = _nameController.text.trim();
+
+    if (productName.isEmpty) {
+      setState(() => _error = 'Введи название продукта');
       return;
     }
 
-    setState(() => _error = null);
+    if (_expiry == null) {
+      setState(() => _error = 'Выбери срок годности');
+      return;
+    }
+
+    setState(() {
+      _error = null;
+      _saving = true;
+    });
 
     try {
       final api = ApiClient(token: widget.auth.token);
-      await api.addStoredProduct(_productId!, _expiry);
-      if (mounted) Navigator.pop(context);
+      await api.addStoredProductByName(productName, _expiry!);
+      if (!mounted) return;
+      Navigator.pop(context, true);
     } catch (e) {
       setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -69,65 +71,54 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
 
     return Padding(
       padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + pad),
-      child: _loading
-          ? const SizedBox(height: 220, child: Center(child: CircularProgressIndicator()))
-          : Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'Ручное добавление',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 12),
-
-                if (_error != null) ...[
-                  Text(_error!, style: const TextStyle(color: Colors.red)),
-                  const SizedBox(height: 8),
-                ],
-
-                DropdownButtonFormField<int>(
-                  decoration: const InputDecoration(labelText: 'Продукт'),
-                  items: _products.map((p) {
-                    return DropdownMenuItem<int>(
-                      value: p['id'] as int,
-                      child: Text(p['name']?.toString() ?? 'Product'),
-                    );
-                  }).toList(),
-                  onChanged: (v) => setState(() => _productId = v),
-                ),
-
-                const SizedBox(height: 12),
-
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        _expiry == null
-                            ? 'Срок годности: не выбран'
-                            : 'Срок годности: ${_expiry!.toLocal().toString().split(" ").first}',
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: _pickDate,
-                      child: const Text('Выбрать дату'),
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 12),
-
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: _save,
-                        child: const Text('Сохранить'),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Добавить продукт',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
+            const SizedBox(height: 12),
+            if (_error != null) ...[
+              Text(_error!, style: const TextStyle(color: Colors.red)),
+              const SizedBox(height: 8),
+            ],
+            TextField(
+              controller: _nameController,
+              textInputAction: TextInputAction.done,
+              decoration: const InputDecoration(
+                labelText: 'Название продукта',
+                hintText: 'Например: молоко, йогурт, сыр',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _saving ? null : _pickDate,
+              icon: const Icon(Icons.calendar_month),
+              label: Text(
+                _expiry == null
+                    ? 'Выбрать срок годности'
+                    : 'Срок годности: ${_expiry!.toLocal().toString().split(' ').first}',
+              ),
+            ),
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: _saving ? null : _save,
+              icon: _saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save),
+              label: Text(_saving ? 'Сохраняем...' : 'Добавить в личный кабинет'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

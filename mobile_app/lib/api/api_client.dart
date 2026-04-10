@@ -64,14 +64,14 @@ class ApiClient {
     return jsonDecode(r.body);
   }
 
-  Future<void> addStoredProduct(int productId, DateTime? expiryAt) async {
+  Future<void> addStoredProductByName(String productName, DateTime expiryAt) async {
     final r = await http.post(
       Uri.parse('$baseUrl/api/Storage'),
       headers: _headers(auth: true),
       body: jsonEncode({
-        'productId': productId,
+        'productName': productName,
         'manufactureAt': null,
-        'expiryAt': expiryAt?.toIso8601String(),
+        'expiryAt': expiryAt.toIso8601String(),
       }),
     );
     if (r.statusCode != 200) throw Exception(r.body);
