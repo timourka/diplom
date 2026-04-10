@@ -84,6 +84,13 @@ public class AdminTrainingController : ControllerBase
         return Ok(remote);
     }
 
+    [HttpPost("jobs/{jobId}/cancel")]
+    public async Task<ActionResult<TrainingJobStatusResponse>> CancelJob(string jobId, CancellationToken ct)
+    {
+        var remote = await _trainingClient.CancelJobAsync(jobId, ct);
+        return Ok(remote);
+    }
+
     private async Task SyncCompletedJobsAsync(IEnumerable<TrainingJobStatusResponse> jobs, CancellationToken ct)
     {
         foreach (var job in jobs)

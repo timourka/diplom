@@ -17,6 +17,8 @@ public class FormTraining : Form
     private readonly TextBox _txtStatus = new() { Multiline = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, ReadOnly = true };
     private readonly Button _btnStart = new() { Text = "Запустить обучение", Width = 180, Height = 36 };
     private readonly Button _btnRefresh = new() { Text = "Обновить список", Width = 140, Height = 36 };
+    private readonly Button _btnDetails = new() { Text = "Подробнее по задаче", Width = 180, Height = 36 };
+    private readonly Button _btnStop = new() { Text = "Остановить задачу", Width = 170, Height = 36 };
     private readonly DataGridView _gridJobs = new()
     {
         Dock = DockStyle.Fill,
@@ -43,7 +45,10 @@ public class FormTraining : Form
 
         _btnStart.Click += async (_, _) => await StartAsync();
         _btnRefresh.Click += async (_, _) => await RefreshJobsAsync();
+        _btnDetails.Click += async (_, _) => await OpenDetailsAsync();
+        _btnStop.Click += async (_, _) => await CancelSelectedJobAsync();
         _gridJobs.SelectionChanged += async (_, _) => await ShowSelectedJobAsync();
+        _gridJobs.CellDoubleClick += async (_, _) => await OpenDetailsAsync();
         _timer.Tick += async (_, _) => await RefreshJobsAsync(silent: true);
         Shown += async (_, _) => await RefreshJobsAsync();
         FormClosed += (_, _) => _timer.Stop();
@@ -75,6 +80,8 @@ public class FormTraining : Form
         var buttons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
         buttons.Controls.Add(_btnStart);
         buttons.Controls.Add(_btnRefresh);
+        buttons.Controls.Add(_btnDetails);
+        buttons.Controls.Add(_btnStop);
 
         AddRow(topLayout, 3, "Mobile export", checksPanel, "Действия", buttons);
 
@@ -97,7 +104,7 @@ public class FormTraining : Form
     private void ConfigureGrid()
     {
         _gridJobs.Columns.Add(new DataGridViewTextBoxColumn { Name = "JobId", HeaderText = "Job ID", DataPropertyName = "JobId", Width = 240 });
-        _gridJobs.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Статус", DataPropertyName = "Status", Width = 90 });
+        _gridJobs.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Статус", DataPropertyName = "Status", Width = 140 });
         _gridJobs.Columns.Add(new DataGridViewTextBoxColumn { Name = "CreatedAt", HeaderText = "Создано", DataPropertyName = "CreatedAt", Width = 150 });
         _gridJobs.Columns.Add(new DataGridViewTextBoxColumn { Name = "StartedAt", HeaderText = "Старт", DataPropertyName = "StartedAt", Width = 150 });
         _gridJobs.Columns.Add(new DataGridViewTextBoxColumn { Name = "FinishedAt", HeaderText = "Финиш", DataPropertyName = "FinishedAt", Width = 150 });
@@ -154,7 +161,7 @@ public class FormTraining : Form
             ));
 
             _txtJobId.Text = response.JobId;
-            AppendStatus($"Job {response.JobId}: {response.Status}. {response.Message}");
+            AppendStatus($"Job {response.JobId}: {TranslateStatus(response.Status)}. {response.Message}");
             await RefreshJobsAsync(selectJobId: response.JobId);
             _timer.Start();
         }
@@ -180,7 +187,7 @@ public class FormTraining : Form
                 .Select(x => new TrainingJobGridRow
                 {
                     JobId = x.JobId,
-                    Status = x.Status,
+                    Status = TranslateStatus(x.Status),
                     CreatedAt = ToLocalString(x.CreatedAt),
                     StartedAt = ToLocalString(x.StartedAt),
                     FinishedAt = ToLocalString(x.FinishedAt),
@@ -193,9 +200,10 @@ public class FormTraining : Form
                 .ToList();
 
             RestoreSelection(selectedJobId);
+            UpdateButtonsState();
 
             if (!silent)
-                AppendStatus($"Список job обновлён. Всего: {jobs.Count}.");
+                AppendStatus($"Список задач обучения обновлён. Всего: {jobs.Count}.");
         }
         catch (Exception ex)
         {
@@ -207,6 +215,7 @@ public class FormTraining : Form
     private async Task ShowSelectedJobAsync()
     {
         var selected = GetSelectedJob();
+        UpdateButtonsState();
         if (selected is null)
             return;
 
@@ -217,33 +226,31 @@ public class FormTraining : Form
             var job = await _api.GetTrainingJobAsync(selected.JobId);
             if (job is null)
             {
-                _txtStatus.Text = "Job не найден на сервере.";
+                _txtStatus.Text = "Задача не найдена на сервере.";
                 return;
             }
 
             var lines = new List<string>
             {
                 $"Job ID: {job.JobId}",
-                $"Статус: {job.Status}",
+                $"Статус: {TranslateStatus(job.Status)}",
                 $"Создано: {ToLocalString(job.CreatedAt)}",
                 $"Старт: {ToLocalString(job.StartedAt)}",
                 $"Финиш: {ToLocalString(job.FinishedAt)}",
-                $"Кадров: {job.ImagesCount}",
+                $"Кадров в датасете: {job.ImagesCount}",
                 $"Базовая модель: {job.BaseModel}",
                 $"Mobile формат: {job.MobileFormat}",
-                $"Best weights: {job.BestWeightsPath ?? "-"}",
-                $"Mobile model: {job.MobileModelPath ?? "-"}",
+                $"Файл лучших весов: {job.BestWeightsPath ?? "-"}",
+                $"Файл мобильной модели: {job.MobileModelPath ?? "-"}",
                 "",
-                "Сообщение:",
-                job.Message ?? "-"
+                "Кратко по метрикам:",
+                BuildMetricsSummary(job.MetricsJson),
+                "",
+                "Сообщение сервиса:",
+                job.Message ?? "-",
+                "",
+                "Подсказка: дважды щёлкните по задаче в списке выше, чтобы открыть подробное окно с пояснениями по каждой метрике на русском языке."
             };
-
-            if (!string.IsNullOrWhiteSpace(job.MetricsJson))
-            {
-                lines.Add("");
-                lines.Add("Метрики:");
-                lines.Add(PrettyJson(job.MetricsJson));
-            }
 
             _txtStatus.Text = string.Join(Environment.NewLine, lines);
 
@@ -256,7 +263,64 @@ public class FormTraining : Form
         }
         catch (Exception ex)
         {
-            _txtStatus.Text = "Ошибка получения job: " + ex.Message;
+            _txtStatus.Text = "Ошибка получения задачи: " + ex.Message;
+        }
+    }
+
+    private async Task OpenDetailsAsync()
+    {
+        var selected = GetSelectedJob();
+        if (selected is null)
+        {
+            MessageBox.Show(this, "Сначала выберите задачу обучения в списке.", "Обучение", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        using var dialog = new FormTrainingJobDetails(_api, selected.JobId);
+        dialog.ShowDialog(this);
+        await RefreshJobsAsync(selectJobId: selected.JobId);
+    }
+
+    private async Task CancelSelectedJobAsync()
+    {
+        var selected = GetSelectedJob();
+        if (selected is null)
+        {
+            MessageBox.Show(this, "Сначала выберите задачу обучения в списке.", "Обучение", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (!CanBeCanceled(selected.Source.Status))
+        {
+            MessageBox.Show(this, "Эту задачу уже нельзя остановить: она завершена, остановлена или завершилась с ошибкой.", "Обучение", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var confirm = MessageBox.Show(
+            this,
+            $"Остановить задачу {selected.JobId}?",
+            "Подтверждение остановки",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+
+        if (confirm != DialogResult.Yes)
+            return;
+
+        try
+        {
+            ToggleBusy(true);
+            var response = await _api.CancelTrainingJobAsync(selected.JobId);
+            AppendStatus($"Задача {selected.JobId}: {TranslateStatus(response.Status)}. {response.Message}");
+            await RefreshJobsAsync(selectJobId: selected.JobId);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Ошибка остановки", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            AppendStatus("Ошибка остановки задачи: " + ex.Message);
+        }
+        finally
+        {
+            ToggleBusy(false);
         }
     }
 
@@ -282,12 +346,69 @@ public class FormTraining : Form
         }
     }
 
+    private void UpdateButtonsState()
+    {
+        var selected = GetSelectedJob();
+        _btnDetails.Enabled = selected is not null;
+        _btnStop.Enabled = selected is not null && CanBeCanceled(selected.Source.Status);
+    }
+
     private static bool IsTerminal(string? status)
         => string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase)
-           || string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase);
+           || string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(status, "canceled", StringComparison.OrdinalIgnoreCase);
+
+    private static bool CanBeCanceled(string? status)
+        => string.Equals(status, "queued", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(status, "running", StringComparison.OrdinalIgnoreCase);
+
+    private static string TranslateStatus(string? status)
+        => status?.ToLowerInvariant() switch
+        {
+            "queued" => "В очереди",
+            "running" => "Выполняется",
+            "completed" => "Завершена успешно",
+            "failed" => "Завершена с ошибкой",
+            "canceled" => "Остановлена",
+            _ => status ?? "-"
+        };
 
     private static string ToLocalString(DateTime? value)
         => value?.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss") ?? "-";
+
+    private static string BuildMetricsSummary(string? metricsJson)
+    {
+        if (string.IsNullOrWhiteSpace(metricsJson))
+            return "Метрики пока не рассчитаны.";
+
+        try
+        {
+            using var document = JsonDocument.Parse(metricsJson);
+            var root = document.RootElement;
+            var lines = new List<string>();
+
+            AppendMetric(lines, root, "mAP50_95", "mAP@0.50:0.95 — основная итоговая метрика качества детектора");
+            AppendMetric(lines, root, "mAP50", "mAP@0.50 — качество при мягком критерии совпадения рамок");
+            AppendMetric(lines, root, "mAP75", "mAP@0.75 — качество при более строгом совпадении рамок");
+            AppendMetric(lines, root, "precision", "Precision — доля правильных срабатываний среди всех найденных");
+            AppendMetric(lines, root, "recall", "Recall — доля реальных дат, которые модель нашла");
+            AppendMetric(lines, root, "fitness", "Fitness — сводная служебная метрика Ultralytics");
+
+            return lines.Count > 0 ? string.Join(Environment.NewLine, lines) : PrettyJson(metricsJson);
+        }
+        catch
+        {
+            return PrettyJson(metricsJson);
+        }
+    }
+
+    private static void AppendMetric(List<string> lines, JsonElement root, string key, string title)
+    {
+        if (!root.TryGetProperty(key, out var value) || !value.TryGetDouble(out var number))
+            return;
+
+        lines.Add($"• {title}: {number:P2} ({number:F4})");
+    }
 
     private static string PrettyJson(string json)
     {
@@ -312,6 +433,15 @@ public class FormTraining : Form
         UseWaitCursor = busy;
         _btnStart.Enabled = !busy;
         _btnRefresh.Enabled = !busy;
+        if (busy)
+        {
+            _btnDetails.Enabled = false;
+            _btnStop.Enabled = false;
+        }
+        else
+        {
+            UpdateButtonsState();
+        }
     }
 
     private sealed class TrainingJobGridRow
