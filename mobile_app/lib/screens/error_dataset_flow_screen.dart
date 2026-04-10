@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:archive/archive_io.dart';
 import 'package:camera/camera.dart';
@@ -23,8 +24,8 @@ class ErrorDatasetFlowScreen extends StatefulWidget {
 
   static const int maxSeconds = 30;
   static const int fps = 6; // ~each 5th frame from 30fps
-  static const int imgSize = 640; // 640x640 for YOLO
 }
+
 
 class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
   CameraController? _controller;
@@ -44,8 +45,9 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
   List<File> _frames = [];
   int _index = 0;
 
-  // bbox per frame in image pixel coords (0..640)
+  // bbox per frame in real image pixel coords.
   final Map<int, Rect> _bboxes = {};
+  final Map<int, Size> _frameSizes = {};
 
   final _comment = TextEditingController();
   String? _status;
@@ -105,8 +107,7 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
 
     setState(() {
       _extracting = true;
-      _status =
-          'Извлечение кадров (fps=${ErrorDatasetFlowScreen.fps}, ${ErrorDatasetFlowScreen.imgSize}x${ErrorDatasetFlowScreen.imgSize})...';
+      _status = 'Извлечение кадров с сохранением исходных пропорций (fps=${ErrorDatasetFlowScreen.fps})...';
     });
 
     try {
@@ -126,12 +127,10 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
       final input = _videoFile!.path;
       final outPattern = '${images.path}/frame_%05d.jpg';
 
-      final imgSize = ErrorDatasetFlowScreen.imgSize;
       final fps = ErrorDatasetFlowScreen.fps;
 
-      // fps + scale to 640 with letterbox pad to 640x640
-      final cmd =
-          '-i "$input" -vf "fps=$fps,scale=$imgSize:$imgSize:force_original_aspect_ratio=decrease,pad=$imgSize:$imgSize:(ow-iw)/2:(oh-ih)/2" -q:v 3 "$outPattern"';
+      // Сохраняем исходное соотношение сторон кадра без квадратного pad.
+      final cmd = '-i "$input" -vf "fps=$fps" -q:v 3 "$outPattern"';
 
       final session = await FFmpegKit.execute(cmd);
       final rc = await session.getReturnCode();
@@ -151,8 +150,16 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
         throw Exception('Не удалось извлечь кадры.');
       }
 
+      final sizes = <int, Size>{};
+      for (var i = 0; i < files.length; i++) {
+        sizes[i] = await _readImageSize(files[i]);
+      }
+
       setState(() {
         _frames = files;
+        _frameSizes
+          ..clear()
+          ..addAll(sizes);
         debugPrint('EXTRACTED FRAMES: ${files.length}');
         for (final f in files.take(10)) {
           debugPrint('FRAME: ${f.path}');
@@ -172,29 +179,49 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
     return 'frame_${i.toString().padLeft(5, '0')}.jpg';
   }
 
+  Future<Size> _readImageSize(File file) async {
+    final bytes = await file.readAsBytes();
+    final completer = Completer<Size>();
+    ui.decodeImageFromList(bytes, (image) {
+      completer.complete(Size(image.width.toDouble(), image.height.toDouble()));
+    });
+    return completer.future;
+  }
+
+  Future<Size> _frameSizeForIndex(int index) async {
+    final cached = _frameSizes[index];
+    if (cached != null) return cached;
+    final size = await _readImageSize(_frames[index]);
+    _frameSizes[index] = size;
+    return size;
+  }
+
   Future<void> _writeYoloLabel(int index, Rect r) async {
     final labels = _labelsDir!;
     final name = _frameName(index).replaceAll('.jpg', '.txt');
     final path = '${labels.path}/$name';
 
-    final s = ErrorDatasetFlowScreen.imgSize.toDouble();
+    final imageSize = await _frameSizeForIndex(index);
+    final width = imageSize.width;
+    final height = imageSize.height;
 
-    double clamp(double v) => v < 0 ? 0 : (v > s ? s : v);
+    double clampX(double v) => v < 0 ? 0 : (v > width ? width : v);
+    double clampY(double v) => v < 0 ? 0 : (v > height ? height : v);
 
-    final left = clamp(r.left);
-    final top = clamp(r.top);
-    final right = clamp(r.right);
-    final bottom = clamp(r.bottom);
+    final left = clampX(r.left);
+    final top = clampY(r.top);
+    final right = clampX(r.right);
+    final bottom = clampY(r.bottom);
 
     final w = math.max(1.0, right - left);
     final h = math.max(1.0, bottom - top);
     final cx = left + w / 2.0;
     final cy = top + h / 2.0;
 
-    final xc = cx / s;
-    final yc = cy / s;
-    final wn = w / s;
-    final hn = h / s;
+    final xc = cx / width;
+    final yc = cy / height;
+    final wn = w / width;
+    final hn = h / height;
 
     final line =
         '0 ${xc.toStringAsFixed(6)} ${yc.toStringAsFixed(6)} ${wn.toStringAsFixed(6)} ${hn.toStringAsFixed(6)}\n';
@@ -259,7 +286,7 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
 
     final meta = File('${root.path}/meta.json');
     await meta.writeAsString(
-      '{"fps":${ErrorDatasetFlowScreen.fps},"imgSize":${ErrorDatasetFlowScreen.imgSize},"frames":${_frames.length}}',
+      '{"fps":${ErrorDatasetFlowScreen.fps},"frames":${_frames.length},"preserveAspect":true}',
       flush: true,
     );
     encoder.addFile(meta, 'meta.json');
@@ -349,7 +376,7 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                const Text('Лимит записи: 30 секунд. Затем нарезаем кадры (fps=6) и приводим к 640x640.'),
+                const Text('Лимит записи: 30 секунд. Затем нарезаем кадры (fps=6) без квадратного pad и размечаем их в исходных пропорциях.'),
                 const SizedBox(height: 8),
                 if (_status != null) Text(_status!),
                 if (_extracting) const Padding(padding: EdgeInsets.only(top: 12), child: LinearProgressIndicator()),
@@ -421,11 +448,13 @@ class _Annotator extends StatefulWidget {
 class _AnnotatorState extends State<_Annotator> {
   Offset? _start;
   Rect? _rect;
+  late Future<Size> _imageSizeFuture;
 
   @override
   void initState() {
     super.initState();
     _rect = widget.initial;
+    _imageSizeFuture = _readImageSize(widget.imageFile);
   }
 
   @override
@@ -434,6 +463,18 @@ class _AnnotatorState extends State<_Annotator> {
     if (oldWidget.initial != widget.initial) {
       _rect = widget.initial;
     }
+    if (oldWidget.imageFile.path != widget.imageFile.path) {
+      _imageSizeFuture = _readImageSize(widget.imageFile);
+    }
+  }
+
+  Future<Size> _readImageSize(File file) async {
+    final bytes = await file.readAsBytes();
+    final completer = Completer<Size>();
+    ui.decodeImageFromList(bytes, (image) {
+      completer.complete(Size(image.width.toDouble(), image.height.toDouble()));
+    });
+    return completer.future;
   }
 
   Rect _rectFrom(Offset a, Offset b) {
@@ -446,57 +487,86 @@ class _AnnotatorState extends State<_Annotator> {
 
   @override
   Widget build(BuildContext context) {
-    // images are 640x640; we show them in a square and scale gestures back to image pixels.
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final box = math.min(constraints.maxWidth, 360.0);
-        final scale = ErrorDatasetFlowScreen.imgSize / box; // local -> image px
+    return FutureBuilder<Size>(
+      future: _imageSizeFuture,
+      builder: (context, snap) {
+        if (!snap.hasData) {
+          return const AspectRatio(
+            aspectRatio: 1,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
 
-        Offset toImage(Offset local) => Offset(local.dx * scale, local.dy * scale);
+        final imageSize = snap.data!;
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final maxWidth = math.min(constraints.maxWidth, 360.0);
+            final aspectRatio = imageSize.width / imageSize.height;
+            final displayWidth = maxWidth;
+            final displayHeight = displayWidth / aspectRatio;
+            final scaleX = imageSize.width / displayWidth;
+            final scaleY = imageSize.height / displayHeight;
 
-        Rect? rectLocal = _rect == null
-            ? null
-            : Rect.fromLTRB(_rect!.left / scale, _rect!.top / scale, _rect!.right / scale, _rect!.bottom / scale);
+            Offset clampLocal(Offset local) => Offset(
+                  local.dx.clamp(0.0, displayWidth).toDouble(),
+                  local.dy.clamp(0.0, displayHeight).toDouble(),
+                );
 
-        return Center(
-          child: GestureDetector(
-            onPanStart: (d) {
-              _start = toImage(d.localPosition);
-              setState(() => _rect = Rect.fromLTWH(_start!.dx, _start!.dy, 1, 1));
-            },
-            onPanUpdate: (d) {
-              if (_start == null) return;
-              final cur = toImage(d.localPosition);
-              setState(() => _rect = _rectFrom(_start!, cur));
-            },
-            onPanEnd: (_) {
-              if (_rect != null) widget.onChanged(_rect!);
-              _start = null;
-            },
-            child: SizedBox(
-              width: box,
-              height: box,
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.file(widget.imageFile, fit: BoxFit.fill),
-                    ),
+            Offset toImage(Offset local) {
+              final clamped = clampLocal(local);
+              return Offset(clamped.dx * scaleX, clamped.dy * scaleY);
+            }
+
+            Rect? rectLocal = _rect == null
+                ? null
+                : Rect.fromLTRB(
+                    _rect!.left / scaleX,
+                    _rect!.top / scaleY,
+                    _rect!.right / scaleX,
+                    _rect!.bottom / scaleY,
+                  );
+
+            return Center(
+              child: GestureDetector(
+                onPanStart: (d) {
+                  _start = toImage(d.localPosition);
+                  setState(() => _rect = Rect.fromLTWH(_start!.dx, _start!.dy, 1, 1));
+                },
+                onPanUpdate: (d) {
+                  if (_start == null) return;
+                  final cur = toImage(d.localPosition);
+                  setState(() => _rect = _rectFrom(_start!, cur));
+                },
+                onPanEnd: (_) {
+                  if (_rect != null) widget.onChanged(_rect!);
+                  _start = null;
+                },
+                child: SizedBox(
+                  width: displayWidth,
+                  height: displayHeight,
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.file(widget.imageFile, fit: BoxFit.fill),
+                        ),
+                      ),
+                      Positioned.fill(child: CustomPaint(painter: _RectPainter(rectLocal))),
+                      Positioned(
+                        right: 8,
+                        top: 8,
+                        child: FilledButton.tonal(
+                          onPressed: () => setState(() => _rect = null),
+                          child: const Text('Сброс'),
+                        ),
+                      ),
+                    ],
                   ),
-                  Positioned.fill(child: CustomPaint(painter: _RectPainter(rectLocal))),
-                  Positioned(
-                    right: 8,
-                    top: 8,
-                    child: FilledButton.tonal(
-                      onPressed: () => setState(() => _rect = null),
-                      child: const Text('Сброс'),
-                    ),
-                  ),
-                ],
+                ),
               ),
-            ),
-          ),
+            );
+          },
         );
       },
     );
