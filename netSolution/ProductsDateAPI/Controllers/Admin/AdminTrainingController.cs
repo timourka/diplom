@@ -106,7 +106,7 @@ public class AdminTrainingController : ControllerBase
             MetricsJson = remote.MetricsJson,
             BaseModel = remote.BaseModel,
             BestWeightsPath = remote.BestWeightsPath,
-            MobileModelPath = remote.MobileModelPath,
+            MobileModelPath = "artifacts/mobile.tflite",
             MobileFormat = remote.MobileFormat
         };
 
