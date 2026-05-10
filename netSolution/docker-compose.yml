@@ -1,0 +1,54 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: productsdate-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-productsdate}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-productsdate}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: products-date-api:latest
+    container_name: productsdate-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-5099}:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__Default: Host=postgres;Port=5432;Database=${POSTGRES_DB:-productsdate};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD}
+      Jwt__Issuer: ${JWT_ISSUER:-ProductsDateAPI}
+      Jwt__Audience: ${JWT_AUDIENCE:-ProductsDateAPI}
+      Jwt__Secret: ${JWT_SECRET:?set JWT_SECRET in .env}
+      Jwt__AccessTokenMinutes: ${JWT_ACCESS_TOKEN_MINUTES:-240}
+      TrainingService__ApiKey: ${TRAINING_CLIENT_API_KEY:?set TRAINING_CLIENT_API_KEY in .env}
+      TrainingService__TempRoot: /app/temp/training
+      TrainingService__SeedDatasetPath: /app/dataset
+      TrainingService__StorageRoot: /app/storage/training
+      Database__ApplyMigrations: ${APPLY_MIGRATIONS:-true}
+      Swagger__Enabled: ${SWAGGER_ENABLED:-true}
+    volumes:
+      - api_storage:/app/storage
+      - api_uploads:/app/uploads
+      - api_temp:/app/temp
+      - ./dataset:/app/dataset:ro
+
+volumes:
+  postgres_data:
+  api_storage:
+  api_uploads:
+  api_temp:

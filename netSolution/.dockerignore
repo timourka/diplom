@@ -1,0 +1,16 @@
+**/bin/
+**/obj/
+.vs/
+.git/
+.gitignore
+*.user
+*.suo
+*.cache
+*.nupkg
+Dockerfile
+README.Docker.md
+.env
+storage/
+temp/
+dataset/
+uploads/
