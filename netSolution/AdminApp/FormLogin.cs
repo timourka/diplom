@@ -2,6 +2,8 @@
 
 public partial class FormLogin : Form
 {
+    private readonly AdminSettings _settings;
+
     public string? Token { get; private set; }
 
     private TextBox _txtEmail = null!;
@@ -10,6 +12,8 @@ public partial class FormLogin : Form
 
     public FormLogin()
     {
+        _settings = AdminSettings.Load();
+
         InitializeComponent();
 
         Text = "Вход в админку";
@@ -81,7 +85,7 @@ public partial class FormLogin : Form
             _btnLogin.Enabled = false;
 
             var token = await AdminApiClient.LoginAsync(
-                "http://localhost:5099/",
+                _settings.ApiBaseUrl,
                 _txtEmail.Text.Trim(),
                 _txtPassword.Text
             );

@@ -1,4 +1,4 @@
-namespace AdminApp;
+﻿namespace AdminApp;
 
 public partial class FormMain : Form
 {
@@ -10,7 +10,9 @@ public partial class FormMain : Form
         InitializeComponent();
 
         _token = token;
-        _api = new AdminApiClient("http://localhost:5099/", _token);
+
+        var settings = AdminSettings.Load();
+        _api = new AdminApiClient(settings.ApiBaseUrl, _token);
 
         Text = "Админка";
         Width = 560;

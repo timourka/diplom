@@ -12,4 +12,10 @@
     <ProjectReference Include="..\Contracts\Contracts.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Settings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>
