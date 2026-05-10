@@ -91,7 +91,9 @@ class ModelSyncService {
       }
 
       final format = (remoteInfo['mobileFormat']?.toString() ?? 'tflite').toLowerCase();
-      final file = File('${modelsDir.path}/latest_model.$format');
+      final remoteFileName = remoteInfo['fileName']?.toString();
+      final safeFileName = _safeModelFileName(remoteFileName, format);
+      final file = File('${modelsDir.path}/$safeFileName');
       await file.writeAsBytes(modelResponse.bodyBytes, flush: true);
 
       await prefs.setInt(_modelVersionKey, latestVersion);
@@ -169,6 +171,21 @@ class ModelSyncService {
 
     final file = File(path);
     return await file.exists() ? path : null;
+  }
+
+
+  String _safeModelFileName(String? remoteFileName, String format) {
+    final fallback = 'latest_model.$format';
+    if (remoteFileName == null || remoteFileName.trim().isEmpty) {
+      return fallback;
+    }
+
+    final cleaned = remoteFileName.split('/').last.split('\\').last.trim();
+    if (cleaned.isEmpty || cleaned.contains('..')) {
+      return fallback;
+    }
+
+    return 'published_$cleaned';
   }
 
   String prettyMetrics(String? raw) {

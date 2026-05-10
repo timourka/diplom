@@ -11,12 +11,12 @@ namespace ProductsDateAPI.Controllers;
 public class MobileModelsController : ControllerBase
 {
     private readonly AppDbContext _db;
-    private readonly TrainingServiceClient _trainingClient;
+    private readonly TrainingFileStorage _storage;
 
-    public MobileModelsController(AppDbContext db, TrainingServiceClient trainingClient)
+    public MobileModelsController(AppDbContext db, TrainingFileStorage storage)
     {
         _db = db;
-        _trainingClient = trainingClient;
+        _storage = storage;
     }
 
     [HttpGet("latest")]
@@ -24,7 +24,7 @@ public class MobileModelsController : ControllerBase
     {
         var model = await _db.ModelVersions
             .AsNoTracking()
-            .Where(x => x.MobileModelPath != null && x.ExternalJobId != null)
+            .Where(x => x.IsPublished && !x.IsDeleted && x.MobileModelPath != null)
             .OrderByDescending(x => x.TrainedAt)
             .FirstOrDefaultAsync(ct);
 
@@ -35,7 +35,9 @@ public class MobileModelsController : ControllerBase
             model.Id,
             model.TrainedAt,
             model.MobileFormat,
-            model.MetricsJson
+            model.MetricsJson,
+            model.MobileModelFileName,
+            model.IsPinned
         ));
     }
 
@@ -44,22 +46,25 @@ public class MobileModelsController : ControllerBase
     {
         var model = await _db.ModelVersions
             .AsNoTracking()
-            .Where(x => x.MobileModelPath != null && x.ExternalJobId != null)
+            .Where(x => x.IsPublished && !x.IsDeleted && x.MobileModelPath != null)
             .OrderByDescending(x => x.TrainedAt)
             .FirstOrDefaultAsync(ct);
 
-        if (model is null || string.IsNullOrWhiteSpace(model.ExternalJobId))
+        if (model is null || string.IsNullOrWhiteSpace(model.MobileModelPath))
             return NotFound();
 
-        var artifact = await _trainingClient.DownloadArtifactAsync(model.ExternalJobId, "mobile", ct);
-        var fileName = string.IsNullOrWhiteSpace(artifact.FileName)
+        var absolute = _storage.ToAbsolutePath(model.MobileModelPath);
+        if (!System.IO.File.Exists(absolute))
+            return NotFound("Published model file is missing on backend storage.");
+
+        var fileName = string.IsNullOrWhiteSpace(model.MobileModelFileName)
             ? $"latest_model.{model.MobileFormat ?? "bin"}"
-            : artifact.FileName;
+            : model.MobileModelFileName;
 
         return File(
-            artifact.Bytes,
-            artifact.ContentType ?? "application/octet-stream",
+            System.IO.File.OpenRead(absolute),
+            string.IsNullOrWhiteSpace(model.MobileModelContentType) ? "application/octet-stream" : model.MobileModelContentType,
             fileName,
-            enableRangeProcessing: false);
+            enableRangeProcessing: true);
     }
 }

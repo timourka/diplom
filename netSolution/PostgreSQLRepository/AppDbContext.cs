@@ -12,6 +12,7 @@ public class AppDbContext : DbContext
     public DbSet<StoredProduct> StoredProducts => Set<StoredProduct>();
     public DbSet<VideoSample> VideoSamples => Set<VideoSample>();
     public DbSet<ModelVersion> ModelVersions => Set<ModelVersion>();
+    public DbSet<TrainingJob> TrainingJobs => Set<TrainingJob>();
     public DbSet<ErrorReport> ErrorReports => Set<ErrorReport>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -28,6 +29,19 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<ModelVersion>()
             .HasIndex(x => x.ExternalJobId)
             .IsUnique();
+
+        modelBuilder.Entity<ModelVersion>()
+            .HasIndex(x => x.IsPublished);
+
+        modelBuilder.Entity<ModelVersion>()
+            .HasIndex(x => x.IsDeleted);
+
+        modelBuilder.Entity<TrainingJob>()
+            .HasIndex(x => x.JobId)
+            .IsUnique();
+
+        modelBuilder.Entity<TrainingJob>()
+            .HasIndex(x => x.Status);
 
         modelBuilder.Entity<StoredProduct>()
             .HasOne(x => x.User)

@@ -31,12 +31,60 @@ public record TrainingJobStatusResponse(
     string? BestWeightsPath,
     string? MobileModelPath,
     string? MobileFormat,
-    string? MetricsJson
+    string? MetricsJson,
+    bool CancellationRequested = false,
+    string? ClientId = null
+);
+
+public record TrainingClientJobResponse(
+    string JobId,
+    int ImagesCount,
+    string? BaseModel,
+    int Epochs,
+    int ImgSize,
+    int Batch,
+    string? Device,
+    bool ExportInt8,
+    bool ExportNms,
+    string? MobileFormat,
+    double QuantizationFraction,
+    bool CancellationRequested
+);
+
+public record TrainingClientStatusRequest(
+    string Status,
+    string? Message,
+    string? MetricsJson = null
+);
+
+public record TrainingClientStatusResponse(
+    string JobId,
+    string Status,
+    bool CancellationRequested,
+    string? Message
+);
+
+public record ModelVersionAdminResponse(
+    int Id,
+    string? ExternalJobId,
+    DateTime TrainedAt,
+    string? MetricsJson,
+    string? BaseModel,
+    string? BestWeightsPath,
+    string? MobileModelPath,
+    string? MobileModelFileName,
+    string? MobileModelContentType,
+    string? MobileFormat,
+    bool IsPublished,
+    bool IsPinned,
+    bool IsDeleted
 );
 
 public record LatestMobileModelResponse(
     int ModelVersionId,
     DateTime TrainedAt,
     string? MobileFormat,
-    string? MetricsJson
+    string? MetricsJson,
+    string? FileName = null,
+    bool IsPinned = false
 );

@@ -82,9 +82,21 @@ namespace PostgreSQLRepository.Migrations
                         .HasMaxLength(2048)
                         .HasColumnType("character varying(2048)");
 
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("ExternalJobId")
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsPinned")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsPublished")
+                        .HasColumnType("boolean");
 
                     b.Property<string>("MetricsJson")
                         .HasColumnType("text");
@@ -92,6 +104,14 @@ namespace PostgreSQLRepository.Migrations
                     b.Property<string>("MobileFormat")
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
+
+                    b.Property<string>("MobileModelContentType")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("MobileModelFileName")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
 
                     b.Property<string>("MobileModelPath")
                         .HasMaxLength(2048)
@@ -104,6 +124,10 @@ namespace PostgreSQLRepository.Migrations
 
                     b.HasIndex("ExternalJobId")
                         .IsUnique();
+
+                    b.HasIndex("IsDeleted");
+
+                    b.HasIndex("IsPublished");
 
                     b.ToTable("ModelVersions");
                 });
@@ -166,6 +190,116 @@ namespace PostgreSQLRepository.Migrations
                     b.HasIndex("UserId");
 
                     b.ToTable("StoredProducts");
+                });
+
+            modelBuilder.Entity("Models.Entities.TrainingJob", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime?>("AssignedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("BaseModel")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<int>("Batch")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("BestWeightsPath")
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)");
+
+                    b.Property<bool>("CancellationRequested")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("ClientId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DatasetZipPath")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)");
+
+                    b.Property<string>("Device")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<int>("Epochs")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("ExportInt8")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("ExportNms")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime?>("FinishedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("HeartbeatAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("ImagesCount")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("ImgSize")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("JobId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("Message")
+                        .HasColumnType("text");
+
+                    b.Property<string>("MetricsJson")
+                        .HasColumnType("text");
+
+                    b.Property<string>("MobileFormat")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("MobileModelContentType")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("MobileModelFileName")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<string>("MobileModelPath")
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)");
+
+                    b.Property<double>("QuantizationFraction")
+                        .HasColumnType("double precision");
+
+                    b.Property<DateTime?>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("JobId")
+                        .IsUnique();
+
+                    b.HasIndex("Status");
+
+                    b.ToTable("TrainingJobs");
                 });
 
             modelBuilder.Entity("Models.Entities.User", b =>

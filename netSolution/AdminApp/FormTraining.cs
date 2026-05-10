@@ -146,7 +146,7 @@ public class FormTraining : Form
         try
         {
             ToggleBusy(true);
-            AppendStatus("Запускаю обучение и отправку approved-датасета на training-service...");
+            AppendStatus("Создаю задачу обучения на backend. Python-клиент заберёт её исходящим запросом...");
 
             var response = await _api.StartTrainingAsync(new StartTrainingRequest(
                 _txtBaseModel.Text.Trim(),
@@ -226,7 +226,7 @@ public class FormTraining : Form
             var job = await _api.GetTrainingJobAsync(selected.JobId);
             if (job is null)
             {
-                _txtStatus.Text = "Задача не найдена на сервере.";
+                _txtStatus.Text = "Задача не найдена на backend.";
                 return;
             }
 
@@ -249,7 +249,7 @@ public class FormTraining : Form
                 "Сообщение сервиса:",
                 job.Message ?? "-",
                 "",
-                "Подсказка: дважды щёлкните по задаче в списке выше, чтобы открыть подробное окно с пояснениями по каждой метрике на русском языке."
+                "Подсказка: дважды щёлкните по задаче в списке выше, чтобы открыть подробное окно с пояснениями по каждой метрике. Готовые модели появятся в окне «Версии модели»."
             };
 
             _txtStatus.Text = string.Join(Environment.NewLine, lines);

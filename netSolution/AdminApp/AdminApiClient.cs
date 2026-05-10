@@ -122,6 +122,55 @@ public class AdminApiClient
         return result ?? throw new Exception("Пустой ответ от сервера при остановке задачи.");
     }
 
+
+    public async Task<List<ModelVersionAdminResponse>> GetModelVersionsAsync(CancellationToken ct = default)
+    {
+        var result = await _http.GetFromJsonAsync<List<ModelVersionAdminResponse>>(
+            "api/admin/training/model-versions", _jsonOptions, ct);
+
+        return result ?? new List<ModelVersionAdminResponse>();
+    }
+
+    public async Task<ModelVersionAdminResponse> PublishModelVersionAsync(int id, CancellationToken ct = default)
+    {
+        using var response = await _http.PostAsync($"api/admin/training/model-versions/{id}/publish", content: null, ct);
+        response.EnsureSuccessStatusCode();
+        return await ReadModelVersionResponseAsync(response, ct);
+    }
+
+    public async Task<ModelVersionAdminResponse> UnpublishModelVersionAsync(int id, CancellationToken ct = default)
+    {
+        using var response = await _http.PostAsync($"api/admin/training/model-versions/{id}/unpublish", content: null, ct);
+        response.EnsureSuccessStatusCode();
+        return await ReadModelVersionResponseAsync(response, ct);
+    }
+
+    public async Task<ModelVersionAdminResponse> PinModelVersionAsync(int id, CancellationToken ct = default)
+    {
+        using var response = await _http.PostAsync($"api/admin/training/model-versions/{id}/pin", content: null, ct);
+        response.EnsureSuccessStatusCode();
+        return await ReadModelVersionResponseAsync(response, ct);
+    }
+
+    public async Task<ModelVersionAdminResponse> UnpinModelVersionAsync(int id, CancellationToken ct = default)
+    {
+        using var response = await _http.PostAsync($"api/admin/training/model-versions/{id}/unpin", content: null, ct);
+        response.EnsureSuccessStatusCode();
+        return await ReadModelVersionResponseAsync(response, ct);
+    }
+
+    public async Task DeleteModelVersionAsync(int id, bool force = false, CancellationToken ct = default)
+    {
+        using var response = await _http.DeleteAsync($"api/admin/training/model-versions/{id}?force={force.ToString().ToLowerInvariant()}", ct);
+        response.EnsureSuccessStatusCode();
+    }
+
+    private async Task<ModelVersionAdminResponse> ReadModelVersionResponseAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        var result = await response.Content.ReadFromJsonAsync<ModelVersionAdminResponse>(_jsonOptions, ct);
+        return result ?? throw new Exception("Пустой ответ от сервера по версии модели.");
+    }
+
     public static async Task<string> LoginAsync(string baseUrl, string email, string password, CancellationToken ct = default)
     {
         using var http = new HttpClient { BaseAddress = new Uri(baseUrl) };

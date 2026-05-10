@@ -26,7 +26,7 @@ builder.Services.AddScoped<StoredProductRepository>();
 // Training pipeline
 builder.Services.Configure<TrainingServiceOptions>(builder.Configuration.GetSection("TrainingService"));
 builder.Services.AddScoped<TrainingDatasetPackager>();
-builder.Services.AddHttpClient<TrainingServiceClient>();
+builder.Services.AddScoped<TrainingFileStorage>();
 
 // JWT
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));

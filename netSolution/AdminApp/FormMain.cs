@@ -13,8 +13,8 @@ public partial class FormMain : Form
         _api = new AdminApiClient("http://localhost:5099/", _token);
 
         Text = "Админка";
-        Width = 540;
-        Height = 320;
+        Width = 560;
+        Height = 390;
         StartPosition = FormStartPosition.CenterScreen;
 
         BuildUi();
@@ -60,8 +60,23 @@ public partial class FormMain : Form
             form.ShowDialog(this);
         };
 
+        var btnModelVersions = new Button
+        {
+            Text = "Версии модели",
+            Width = 220,
+            Height = 50,
+            Location = new Point(20, 150)
+        };
+
+        btnModelVersions.Click += (_, _) =>
+        {
+            using var form = new FormModelVersions(_api);
+            form.ShowDialog(this);
+        };
+
         Controls.Add(lblTitle);
         Controls.Add(btnErrorReports);
         Controls.Add(btnTraining);
+        Controls.Add(btnModelVersions);
     }
 }

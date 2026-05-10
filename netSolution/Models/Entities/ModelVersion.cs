@@ -25,5 +25,19 @@ public class ModelVersion : BaseEntity
     [MaxLength(32)]
     public string? MobileFormat { get; set; }
 
+    [MaxLength(512)]
+    public string? MobileModelFileName { get; set; }
+
+    [MaxLength(128)]
+    public string? MobileModelContentType { get; set; }
+
+    public bool IsPublished { get; set; }
+
+    public bool IsPinned { get; set; }
+
+    public bool IsDeleted { get; set; }
+
+    public DateTime? DeletedAt { get; set; }
+
     public ICollection<ErrorReport> ErrorReports { get; set; } = new List<ErrorReport>();
 }
