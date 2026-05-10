@@ -91,8 +91,8 @@ public sealed class BackupService
             if (replaceExisting)
             {
                 await ClearDatabaseAsync(ct);
-                DeleteDirectoryIfExists(_trainingStorage.RootPath);
-                DeleteDirectoryIfExists(UploadsRootPath);
+                ClearDirectoryContents(_trainingStorage.RootPath);
+                ClearDirectoryContents(UploadsRootPath);
             }
 
             CopyDirectoryContentsIfExists(Path.Combine(extractRoot, "storage", "training"), _trainingStorage.RootPath);
@@ -445,12 +445,15 @@ public sealed class BackupService
         }
     }
 
-    private static void DeleteDirectoryIfExists(string directory)
+    private static void ClearDirectoryContents(string directory)
     {
-        if (Directory.Exists(directory))
-            Directory.Delete(directory, recursive: true);
-
         Directory.CreateDirectory(directory);
+
+        foreach (var file in Directory.EnumerateFiles(directory))
+            File.Delete(file);
+
+        foreach (var subDirectory in Directory.EnumerateDirectories(directory))
+            Directory.Delete(subDirectory, recursive: true);
     }
 
     private static string JoinZipPath(string left, string right)
