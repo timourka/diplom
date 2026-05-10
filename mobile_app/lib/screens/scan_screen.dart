@@ -18,8 +18,14 @@ import 'settings_screen.dart';
 class ScanScreen extends StatefulWidget {
   final AuthState auth;
   final List<CameraDescription> cameras;
+  final String? startupError;
 
-  const ScanScreen({super.key, required this.auth, required this.cameras});
+  const ScanScreen({
+    super.key,
+    required this.auth,
+    required this.cameras,
+    this.startupError,
+  });
 
   @override
   State<ScanScreen> createState() => _ScanScreenState();
@@ -47,6 +53,9 @@ class _ScanScreenState extends State<ScanScreen> {
   void initState() {
     super.initState();
     _detector = TfliteDateDetector(modelSyncService: _modelSync);
+    if (widget.startupError != null && widget.startupError!.isNotEmpty) {
+      _aiStatus = widget.startupError!;
+    }
     _initialize();
   }
 
@@ -73,42 +82,53 @@ class _ScanScreenState extends State<ScanScreen> {
   Future<void> _initialize() async {
     if (widget.cameras.isEmpty) {
       if (mounted) {
-        setState(() => _aiStatus = 'Камера не найдена.');
+        setState(() => _aiStatus = 'Камера не найдена или нет разрешения на камеру.');
       }
       return;
     }
 
-    final back = widget.cameras.where((c) => c.lensDirection == CameraLensDirection.back);
-    final cam = back.isNotEmpty ? back.first : widget.cameras.first;
-    _selectedCamera = cam;
+    try {
+      final back = widget.cameras.where((c) => c.lensDirection == CameraLensDirection.back);
+      final cam = back.isNotEmpty ? back.first : widget.cameras.first;
+      _selectedCamera = cam;
 
-    final controller = CameraController(
-      cam,
-      ResolutionPreset.low,
-      enableAudio: false,
-      imageFormatGroup: ImageFormatGroup.yuv420,
-    );
+      final controller = CameraController(
+        cam,
+        ResolutionPreset.low,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.yuv420,
+      );
 
-    _controller = controller;
-    _initFuture = controller.initialize();
-    if (mounted) setState(() {});
+      _controller = controller;
+      _initFuture = controller.initialize();
+      if (mounted) setState(() {});
 
-    await _initFuture;
+      await _initFuture;
 
-    _localModelInfo = await _modelSync.readLocalModelInfo();
-    final ready = await _detector.loadLatestModel();
+      _localModelInfo = await _modelSync.readLocalModelInfo();
+      final ready = await _detector.loadLatestModel();
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    setState(() {
-      _aiReady = ready;
-      _aiStatus = ready
-          ? 'ИИ готова.'
-          : 'Локальная модель не найдена. Зайди в настройки и обнови версию ИИ.';
-    });
+      setState(() {
+        _aiReady = ready;
+        _aiStatus = ready
+            ? 'ИИ готова.'
+            : 'Локальная модель не найдена. Зайди в настройки и обнови версию ИИ.';
+      });
 
-    if (ready) {
-      await _startImageStream();
+      if (ready) {
+        await _startImageStream();
+      }
+    } catch (e) {
+      await _controller?.dispose();
+      if (!mounted) return;
+      setState(() {
+        _controller = null;
+        _initFuture = null;
+        _aiReady = false;
+        _aiStatus = 'Ошибка запуска камеры: $e';
+      });
     }
   }
 
@@ -334,14 +354,41 @@ class _ScanScreenState extends State<ScanScreen> {
         children: [
           Positioned.fill(
             child: _controller == null
-                ? const Center(child: CircularProgressIndicator())
+                ? Container(
+                    color: Colors.black,
+                    alignment: Alignment.center,
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      _aiStatus,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white, fontSize: 16),
+                    ),
+                  )
                 : FutureBuilder(
                     future: _initFuture,
                     builder: (context, snap) {
+                      if (snap.hasError) {
+                        return Container(
+                          color: Colors.black,
+                          alignment: Alignment.center,
+                          padding: const EdgeInsets.all(24),
+                          child: Text(
+                            'Ошибка камеры: ${snap.error}',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.white, fontSize: 16),
+                          ),
+                        );
+                      }
+
                       if (snap.connectionState != ConnectionState.done) {
                         return const Center(child: CircularProgressIndicator());
                       }
-                      final previewSize = _controller!.value.previewSize!;
+
+                      final previewSize = _controller!.value.previewSize;
+                      if (previewSize == null) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+
                       final childSize = Size(previewSize.height, previewSize.width);
 
                       return Stack(

@@ -1,4 +1,4 @@
-import 'package:shared_preferences/shared_preferences.dart';
+import '../storage/file_key_value_store.dart';
 
 class AuthState {
   static const _tokenKey = 'access_token';
@@ -8,19 +8,20 @@ class AuthState {
   bool get isAuthed => _token != null && _token!.isNotEmpty;
 
   Future<void> load() async {
-    final sp = await SharedPreferences.getInstance();
-    _token = sp.getString(_tokenKey);
+    try {
+      _token = await FileKeyValueStore.getString(_tokenKey);
+    } catch (_) {
+      _token = null;
+    }
   }
 
   Future<void> setToken(String token) async {
     _token = token;
-    final sp = await SharedPreferences.getInstance();
-    await sp.setString(_tokenKey, token);
+    await FileKeyValueStore.setString(_tokenKey, token);
   }
 
   Future<void> logout() async {
     _token = null;
-    final sp = await SharedPreferences.getInstance();
-    await sp.remove(_tokenKey);
+    await FileKeyValueStore.remove(_tokenKey);
   }
 }

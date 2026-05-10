@@ -187,7 +187,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   controller: _baseUrlController,
                   decoration: const InputDecoration(
                     labelText: 'BaseUrl сервера',
-                    hintText: 'http://10.0.2.2:5099',
+                    hintText: 'http://111.88.146.2:5099',
                     border: OutlineInputBorder(),
                   ),
                 ),

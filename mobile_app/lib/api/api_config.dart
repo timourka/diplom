@@ -1,7 +1,7 @@
-import 'package:shared_preferences/shared_preferences.dart';
+import '../storage/file_key_value_store.dart';
 
 class ApiConfig {
-  static const defaultBaseUrl = 'http://10.0.2.2:5099';
+  static const defaultBaseUrl = 'http://111.88.146.2:5099';
   static const _baseUrlKey = 'api_base_url';
 
   static String _baseUrl = defaultBaseUrl;
@@ -9,14 +9,17 @@ class ApiConfig {
   static String get baseUrl => _baseUrl;
 
   static Future<void> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    _baseUrl = _normalize(prefs.getString(_baseUrlKey) ?? defaultBaseUrl);
+    try {
+      final stored = await FileKeyValueStore.getString(_baseUrlKey);
+      _baseUrl = _normalize(stored ?? defaultBaseUrl);
+    } catch (_) {
+      _baseUrl = defaultBaseUrl;
+    }
   }
 
   static Future<void> setBaseUrl(String value) async {
     _baseUrl = _normalize(value);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_baseUrlKey, _baseUrl);
+    await FileKeyValueStore.setString(_baseUrlKey, _baseUrl);
   }
 
   static Future<void> reset() => setBaseUrl(defaultBaseUrl);

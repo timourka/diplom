@@ -2,9 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-
+import '../storage/file_key_value_store.dart';
 import 'api_client.dart';
 
 class ModelSyncResult {
@@ -33,8 +31,10 @@ class ModelSyncService {
   static const _syncedAtKey = 'mobile_model_synced_at';
 
   Future<ModelSyncResult> trySyncLatestModel({bool force = false}) async {
+    Map<String, dynamic>? remoteInfo;
+
     try {
-      final remoteInfo = await fetchLatestModelInfo();
+      remoteInfo = await fetchLatestModelInfo();
       if (remoteInfo == null) {
         return ModelSyncResult(
           success: false,
@@ -44,7 +44,7 @@ class ModelSyncService {
         );
       }
 
-      final latestVersion = remoteInfo['modelVersionId'] as int?;
+      final latestVersion = _asInt(remoteInfo['modelVersionId']);
       if (latestVersion == null) {
         return ModelSyncResult(
           success: false,
@@ -55,9 +55,9 @@ class ModelSyncService {
         );
       }
 
-      final prefs = await SharedPreferences.getInstance();
-      final currentVersion = prefs.getInt(_modelVersionKey);
-      final currentPath = prefs.getString(_modelPathKey);
+      final localInfo = await readLocalModelInfo();
+      final currentVersion = _asInt(localInfo?['modelVersionId']);
+      final currentPath = localInfo?['modelPath']?.toString();
       final hasLocalFile = currentPath != null && await File(currentPath).exists();
 
       if (!force && currentVersion == latestVersion && hasLocalFile) {
@@ -66,7 +66,7 @@ class ModelSyncService {
           downloaded: false,
           message: 'Уже используется актуальная версия ИИ.',
           remoteInfo: remoteInfo,
-          localInfo: await readLocalModelInfo(),
+          localInfo: localInfo,
         );
       }
 
@@ -84,38 +84,36 @@ class ModelSyncService {
         );
       }
 
-      final appDir = await getApplicationDocumentsDirectory();
-      final modelsDir = Directory('${appDir.path}/models');
-      if (!await modelsDir.exists()) {
-        await modelsDir.create(recursive: true);
-      }
-
+      final modelsDir = await _modelsDirectory();
       final format = (remoteInfo['mobileFormat']?.toString() ?? 'tflite').toLowerCase();
       final remoteFileName = remoteInfo['fileName']?.toString();
       final safeFileName = _safeModelFileName(remoteFileName, format);
       final file = File('${modelsDir.path}/$safeFileName');
       await file.writeAsBytes(modelResponse.bodyBytes, flush: true);
 
-      await prefs.setInt(_modelVersionKey, latestVersion);
-      await prefs.setString(_modelPathKey, file.path);
-      await prefs.setString(_trainedAtKey, remoteInfo['trainedAt']?.toString() ?? '');
-      await prefs.setString(_formatKey, format);
-      await prefs.setString(_metricsJsonKey, remoteInfo['metricsJson']?.toString() ?? '');
-      await prefs.setString(_sourceUrlKey, ApiClient.baseUrl);
-      await prefs.setString(_syncedAtKey, DateTime.now().toIso8601String());
+      await FileKeyValueStore.setInt(_modelVersionKey, latestVersion);
+      await FileKeyValueStore.setString(_modelPathKey, file.path);
+      await FileKeyValueStore.setString(_trainedAtKey, remoteInfo['trainedAt']?.toString() ?? '');
+      await FileKeyValueStore.setString(_formatKey, format);
+      await FileKeyValueStore.setString(_metricsJsonKey, remoteInfo['metricsJson']?.toString() ?? '');
+      await FileKeyValueStore.setString(_sourceUrlKey, ApiClient.baseUrl);
+      await FileKeyValueStore.setString(_syncedAtKey, DateTime.now().toIso8601String());
+
+      final updatedLocalInfo = await readLocalModelInfo();
 
       return ModelSyncResult(
         success: true,
         downloaded: true,
         message: 'Модель ИИ обновлена до версии #$latestVersion.',
         remoteInfo: remoteInfo,
-        localInfo: await readLocalModelInfo(),
+        localInfo: updatedLocalInfo,
       );
     } catch (e) {
       return ModelSyncResult(
         success: false,
         downloaded: false,
         message: 'Не удалось обновить ИИ: $e',
+        remoteInfo: remoteInfo,
         localInfo: await readLocalModelInfo(),
       );
     }
@@ -131,48 +129,84 @@ class ModelSyncService {
         return null;
       }
 
-      return jsonDecode(metaResponse.body) as Map<String, dynamic>;
+      final decoded = jsonDecode(metaResponse.body);
+      return decoded is Map<String, dynamic> ? decoded : null;
     } catch (_) {
       return null;
     }
   }
 
   Future<Map<String, dynamic>?> readLocalModelInfo() async {
-    final prefs = await SharedPreferences.getInstance();
-    final version = prefs.getInt(_modelVersionKey);
-    final path = prefs.getString(_modelPathKey);
+    try {
+      final version = await FileKeyValueStore.getInt(_modelVersionKey);
+      final path = await FileKeyValueStore.getString(_modelPathKey);
 
-    if (version == null || path == null) {
+      if (version == null || path == null || path.isEmpty) {
+        return null;
+      }
+
+      final file = File(path);
+      final exists = await file.exists();
+
+      return {
+        'modelVersionId': version,
+        'modelPath': path,
+        'trainedAt': await FileKeyValueStore.getString(_trainedAtKey),
+        'mobileFormat': await FileKeyValueStore.getString(_formatKey),
+        'metricsJson': await FileKeyValueStore.getString(_metricsJsonKey),
+        'sourceUrl': await FileKeyValueStore.getString(_sourceUrlKey),
+        'syncedAt': await FileKeyValueStore.getString(_syncedAtKey),
+        'fileExists': exists,
+        'fileSizeBytes': exists ? await file.length() : null,
+      };
+    } catch (_) {
       return null;
     }
-
-    final file = File(path);
-    final exists = await file.exists();
-
-    return {
-      'modelVersionId': version,
-      'modelPath': path,
-      'trainedAt': prefs.getString(_trainedAtKey),
-      'mobileFormat': prefs.getString(_formatKey),
-      'metricsJson': prefs.getString(_metricsJsonKey),
-      'sourceUrl': prefs.getString(_sourceUrlKey),
-      'syncedAt': prefs.getString(_syncedAtKey),
-      'fileExists': exists,
-      'fileSizeBytes': exists ? await file.length() : null,
-    };
   }
 
   Future<String?> localModelPath() async {
-    final prefs = await SharedPreferences.getInstance();
-    final path = prefs.getString(_modelPathKey);
-    if (path == null) {
+    try {
+      final path = await FileKeyValueStore.getString(_modelPathKey);
+      if (path != null && path.isNotEmpty) {
+        final file = File(path);
+        if (await file.exists()) {
+          return path;
+        }
+      }
+
+      // Резервный вариант: если метаданные не сохранились, но файл модели есть,
+      // берём самый свежий .tflite/.lite из папки models.
+      final modelsDir = await _modelsDirectory();
+      final files = await modelsDir
+          .list()
+          .where((entity) => entity is File)
+          .cast<File>()
+          .where((file) {
+            final name = file.path.toLowerCase();
+            return name.endsWith('.tflite') || name.endsWith('.lite');
+          })
+          .toList();
+
+      if (files.isEmpty) {
+        return null;
+      }
+
+      files.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
+      return files.first.path;
+    } catch (_) {
       return null;
     }
-
-    final file = File(path);
-    return await file.exists() ? path : null;
   }
 
+  Future<Directory> _modelsDirectory() {
+    return FileKeyValueStore.namedDirectory('models');
+  }
+
+  int? _asInt(Object? value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '');
+  }
 
   String _safeModelFileName(String? remoteFileName, String format) {
     final fallback = 'latest_model.$format';

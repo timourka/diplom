@@ -6,12 +6,12 @@ import 'dart:ui' as ui;
 import 'package:archive/archive_io.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 
 import '../api/api_client.dart';
 import '../auth/auth_state.dart';
+import '../storage/file_key_value_store.dart';
 
 class ErrorDatasetFlowScreen extends StatefulWidget {
   final AuthState auth;
@@ -111,8 +111,8 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
     });
 
     try {
-      final appDir = await getApplicationDocumentsDirectory();
-      final root = Directory('${appDir.path}/error_report_${DateTime.now().millisecondsSinceEpoch}');
+      final reportsDir = await FileKeyValueStore.namedDirectory('error_reports');
+      final root = Directory('${reportsDir.path}/error_report_${DateTime.now().millisecondsSinceEpoch}');
       await root.create(recursive: true);
 
       final images = Directory('${root.path}/images');
