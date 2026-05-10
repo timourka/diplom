@@ -76,9 +76,24 @@ public partial class FormMain : Form
             form.ShowDialog(this);
         };
 
+        var btnBackup = new Button
+        {
+            Text = "Backup / восстановление",
+            Width = 220,
+            Height = 50,
+            Location = new Point(260, 150)
+        };
+
+        btnBackup.Click += (_, _) =>
+        {
+            using var form = new FormBackup(_api);
+            form.ShowDialog(this);
+        };
+
         Controls.Add(lblTitle);
         Controls.Add(btnErrorReports);
         Controls.Add(btnTraining);
         Controls.Add(btnModelVersions);
+        Controls.Add(btnBackup);
     }
 }

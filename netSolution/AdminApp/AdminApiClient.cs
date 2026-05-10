@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -18,7 +19,8 @@ public class AdminApiClient
     {
         _http = new HttpClient
         {
-            BaseAddress = new Uri(baseUrl)
+            BaseAddress = new Uri(baseUrl),
+            Timeout = TimeSpan.FromMinutes(30)
         };
 
         _http.DefaultRequestHeaders.Authorization =
@@ -163,6 +165,52 @@ public class AdminApiClient
     {
         using var response = await _http.DeleteAsync($"api/admin/training/model-versions/{id}?force={force.ToString().ToLowerInvariant()}", ct);
         response.EnsureSuccessStatusCode();
+    }
+
+
+    public async Task<string> ExportBackupAsync(string destinationPath, CancellationToken ct = default)
+    {
+        using var response = await _http.GetAsync("api/admin/backup/export", HttpCompletionOption.ResponseHeadersRead, ct);
+        response.EnsureSuccessStatusCode();
+
+        var fileName = response.Content.Headers.ContentDisposition?.FileNameStar
+                       ?? response.Content.Headers.ContentDisposition?.FileName?.Trim('\"')
+                       ?? Path.GetFileName(destinationPath);
+
+        var directory = Path.GetDirectoryName(destinationPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        await using var source = await response.Content.ReadAsStreamAsync(ct);
+        await using var destination = File.Create(destinationPath);
+        await source.CopyToAsync(destination, ct);
+
+        return fileName;
+    }
+
+    public async Task<BackupImportResultDto> ImportBackupAsync(string backupZipPath, bool replaceExisting, CancellationToken ct = default)
+    {
+        await using var fileStream = File.OpenRead(backupZipPath);
+        using var content = new MultipartFormDataContent();
+
+        var fileContent = new StreamContent(fileStream);
+        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
+
+        content.Add(fileContent, "BackupZip", Path.GetFileName(backupZipPath));
+        content.Add(new StringContent(replaceExisting.ToString().ToLowerInvariant()), "ReplaceExisting");
+
+        using var response = await _http.PostAsync("api/admin/backup/import", content, ct);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = await response.Content.ReadAsStringAsync(ct);
+            throw new HttpRequestException(string.IsNullOrWhiteSpace(error)
+                ? $"Ошибка импорта backup: {(int)response.StatusCode} {response.ReasonPhrase}"
+                : error);
+        }
+
+        var result = await response.Content.ReadFromJsonAsync<BackupImportResultDto>(_jsonOptions, ct);
+        return result ?? throw new Exception("Пустой ответ от сервера после импорта backup.");
     }
 
     private async Task<ModelVersionAdminResponse> ReadModelVersionResponseAsync(HttpResponseMessage response, CancellationToken ct)

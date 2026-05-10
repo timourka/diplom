@@ -132,3 +132,43 @@ docker compose down -v
 docker compose build api
 docker compose up -d api
 ```
+
+## Backup / restore backend data
+
+Backend has admin endpoints for exporting and importing a full ZIP backup.
+The ZIP contains:
+
+- `manifest.json` — backup metadata;
+- `database.json` — users, products, stored products, error reports, video samples, model versions, training jobs;
+- `storage/training/**` — trained model files and training job datasets/artifacts;
+- `uploads/**` — uploaded error-report datasets.
+
+Get an admin JWT token first through `/api/Auth/login`, then export:
+
+```bash
+curl -L \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -o productsdate_backup.zip \
+  "http://SERVER_IP:5099/api/admin/backup/export"
+```
+
+Import into an empty database:
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -F "BackupZip=@productsdate_backup.zip" \
+  "http://SERVER_IP:5099/api/admin/backup/import"
+```
+
+Import with replacement of existing data and files:
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -F "BackupZip=@productsdate_backup.zip" \
+  -F "ReplaceExisting=true" \
+  "http://SERVER_IP:5099/api/admin/backup/import"
+```
+
+`ReplaceExisting=true` deletes current database rows plus current `/app/storage/training` and `/app/uploads` files before restoring from the ZIP.
