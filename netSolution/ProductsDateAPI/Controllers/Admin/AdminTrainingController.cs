@@ -237,7 +237,19 @@ public class AdminTrainingController : ControllerBase
             job.MobileFormat,
             job.MetricsJson,
             job.CancellationRequested,
-            job.ClientId);
+            job.ClientId,
+            job.AssignedAt,
+            job.HeartbeatAt,
+            job.DatasetZipPath,
+            job.Epochs,
+            job.ImgSize,
+            job.Batch,
+            job.Device,
+            job.ExportInt8,
+            job.ExportNms,
+            job.QuantizationFraction,
+            job.MobileModelFileName,
+            job.MobileModelContentType);
 
     private static ModelVersionAdminResponse ToModelVersionResponse(ModelVersion model)
         => new(
@@ -253,5 +265,6 @@ public class AdminTrainingController : ControllerBase
             model.MobileFormat,
             model.IsPublished,
             model.IsPinned,
-            model.IsDeleted);
+            model.IsDeleted,
+            model.DeletedAt);
 }

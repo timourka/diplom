@@ -8,15 +8,22 @@ public sealed class FormTrainingJobDetails : Form
 {
     private readonly AdminApiClient _api;
     private readonly string _jobId;
+    private TrainingJobStatusResponse? _job;
 
     private readonly Label _lblJobIdValue = CreateValueLabel();
     private readonly Label _lblStatusValue = CreateValueLabel();
     private readonly Label _lblCreatedAtValue = CreateValueLabel();
     private readonly Label _lblStartedAtValue = CreateValueLabel();
     private readonly Label _lblFinishedAtValue = CreateValueLabel();
+    private readonly Label _lblAssignedAtValue = CreateValueLabel();
+    private readonly Label _lblHeartbeatAtValue = CreateValueLabel();
     private readonly Label _lblImagesCountValue = CreateValueLabel();
     private readonly Label _lblBaseModelValue = CreateValueLabel();
     private readonly Label _lblMobileFormatValue = CreateValueLabel();
+    private readonly Label _lblClientIdValue = CreateValueLabel();
+    private readonly Label _lblParamsValue = CreateValueLabel();
+    private readonly Label _lblMobileExportValue = CreateValueLabel();
+    private readonly Label _lblCancellationValue = CreateValueLabel();
     private readonly TextBox _txtArtifacts = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, Height = 80 };
     private readonly TextBox _txtMessage = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, Height = 130 };
     private readonly DataGridView _gridMetrics = new()
@@ -34,6 +41,7 @@ public sealed class FormTrainingJobDetails : Form
     };
     private readonly Button _btnRefresh = new() { Text = "Обновить", Width = 120, Height = 36 };
     private readonly Button _btnStop = new() { Text = "Остановить задачу", Width = 180, Height = 36 };
+    private readonly Button _btnOpenModel = new() { Text = "Открыть версию модели", Width = 210, Height = 36 };
     private readonly Button _btnClose = new() { Text = "Закрыть", Width = 120, Height = 36 };
 
     public FormTrainingJobDetails(AdminApiClient api, string jobId)
@@ -43,13 +51,14 @@ public sealed class FormTrainingJobDetails : Form
 
         Text = $"Задача обучения: {jobId}";
         Width = 1100;
-        Height = 760;
+        Height = 820;
         StartPosition = FormStartPosition.CenterParent;
 
         BuildUi();
 
         _btnRefresh.Click += async (_, _) => await LoadJobAsync();
         _btnStop.Click += async (_, _) => await CancelJobAsync();
+        _btnOpenModel.Click += async (_, _) => await OpenModelVersionAsync();
         _btnClose.Click += (_, _) => Close();
         Shown += async (_, _) => await LoadJobAsync();
     }
@@ -72,9 +81,12 @@ public sealed class FormTrainingJobDetails : Form
         header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
 
         AddInfoRow(header, 0, "Job ID", _lblJobIdValue, "Статус", _lblStatusValue);
-        AddInfoRow(header, 1, "Создано", _lblCreatedAtValue, "Запущено", _lblStartedAtValue);
-        AddInfoRow(header, 2, "Завершено", _lblFinishedAtValue, "Кадров в датасете", _lblImagesCountValue);
-        AddInfoRow(header, 3, "Базовая модель", _lblBaseModelValue, "Mobile формат", _lblMobileFormatValue);
+        AddInfoRow(header, 1, "Создано", _lblCreatedAtValue, "Назначено клиенту", _lblAssignedAtValue);
+        AddInfoRow(header, 2, "Запущено", _lblStartedAtValue, "Последний heartbeat", _lblHeartbeatAtValue);
+        AddInfoRow(header, 3, "Завершено", _lblFinishedAtValue, "Кадров в датасете", _lblImagesCountValue);
+        AddInfoRow(header, 4, "Клиент обучения", _lblClientIdValue, "Остановка", _lblCancellationValue);
+        AddInfoRow(header, 5, "Базовая модель", _lblBaseModelValue, "Mobile формат", _lblMobileFormatValue);
+        AddInfoRow(header, 6, "Параметры", _lblParamsValue, "Mobile export", _lblMobileExportValue);
 
         var actionsPanel = new FlowLayoutPanel
         {
@@ -83,7 +95,7 @@ public sealed class FormTrainingJobDetails : Form
             Padding = new Padding(12, 0, 12, 12),
             FlowDirection = FlowDirection.LeftToRight,
         };
-        actionsPanel.Controls.AddRange([_btnRefresh, _btnStop, _btnClose]);
+        actionsPanel.Controls.AddRange([_btnRefresh, _btnStop, _btnOpenModel, _btnClose]);
 
         var content = new TableLayoutPanel
         {
@@ -189,24 +201,64 @@ public sealed class FormTrainingJobDetails : Form
 
     private void Render(TrainingJobStatusResponse job)
     {
+        _job = job;
         _lblJobIdValue.Text = job.JobId;
         _lblStatusValue.Text = TranslateStatus(job.Status);
         _lblCreatedAtValue.Text = ToLocalString(job.CreatedAt);
         _lblStartedAtValue.Text = ToLocalString(job.StartedAt);
         _lblFinishedAtValue.Text = ToLocalString(job.FinishedAt);
+        _lblAssignedAtValue.Text = ToLocalString(job.AssignedAt);
+        _lblHeartbeatAtValue.Text = ToLocalString(job.HeartbeatAt);
         _lblImagesCountValue.Text = job.ImagesCount.ToString(CultureInfo.InvariantCulture);
         _lblBaseModelValue.Text = job.BaseModel ?? "-";
         _lblMobileFormatValue.Text = job.MobileFormat ?? "-";
+        _lblClientIdValue.Text = job.ClientId ?? "-";
+        _lblCancellationValue.Text = job.CancellationRequested ? "запрошена" : "нет";
+        _lblParamsValue.Text = BuildTrainingParams(job);
+        _lblMobileExportValue.Text = BuildMobileExport(job);
 
         _txtArtifacts.Text = string.Join(Environment.NewLine, new[]
         {
+            $"Dataset ZIP: {job.DatasetZipPath ?? "-"}",
             $"Файл весов лучшей модели: {job.BestWeightsPath ?? "-"}",
-            $"Файл мобильной модели: {job.MobileModelPath ?? "-"}"
+            $"Файл мобильной модели: {job.MobileModelPath ?? "-"}",
+            $"Имя mobile-файла: {job.MobileModelFileName ?? "-"}",
+            $"Mobile Content-Type: {job.MobileModelContentType ?? "-"}"
         });
 
         _txtMessage.Text = job.Message ?? "-";
         _gridMetrics.DataSource = BuildMetricRows(job.MetricsJson);
         _btnStop.Enabled = CanBeCanceled(job.Status);
+        _btnOpenModel.Enabled = HasPossibleModel(job);
+    }
+
+    private async Task OpenModelVersionAsync()
+    {
+        if (_job is null)
+            return;
+
+        try
+        {
+            ToggleBusy(true);
+            var versions = await _api.GetModelVersionsAsync();
+            var model = versions.FirstOrDefault(x => string.Equals(x.ExternalJobId, _job.JobId, StringComparison.OrdinalIgnoreCase));
+            if (model is null)
+            {
+                MessageBox.Show(this, "Для этой задачи пока нет сохранённой версии модели.", "Версия модели", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            using var form = new FormModelVersionDetails(_api, model);
+            form.ShowDialog(this);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Ошибка открытия версии модели", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            ToggleBusy(false);
+        }
     }
 
     private void ToggleBusy(bool busy)
@@ -215,7 +267,14 @@ public sealed class FormTrainingJobDetails : Form
         _btnRefresh.Enabled = !busy;
         _btnClose.Enabled = !busy;
         if (busy)
+        {
             _btnStop.Enabled = false;
+            _btnOpenModel.Enabled = false;
+        }
+        else
+        {
+            _btnOpenModel.Enabled = _job is not null && HasPossibleModel(_job);
+        }
     }
 
     private static List<MetricRow> BuildMetricRows(string? metricsJson)
@@ -299,6 +358,25 @@ public sealed class FormTrainingJobDetails : Form
 
         return value.ToString();
     }
+
+    private static string BuildTrainingParams(TrainingJobStatusResponse job)
+        => $"epochs={job.Epochs?.ToString(CultureInfo.InvariantCulture) ?? "-"}, "
+           + $"imgsz={job.ImgSize?.ToString(CultureInfo.InvariantCulture) ?? "-"}, "
+           + $"batch={job.Batch?.ToString(CultureInfo.InvariantCulture) ?? "-"}, "
+           + $"device={job.Device ?? "-"}";
+
+    private static string BuildMobileExport(TrainingJobStatusResponse job)
+        => $"int8={BoolText(job.ExportInt8)}, "
+           + $"nms={BoolText(job.ExportNms)}, "
+           + $"quant={job.QuantizationFraction?.ToString("0.###", CultureInfo.InvariantCulture) ?? "-"}";
+
+    private static string BoolText(bool? value)
+        => value.HasValue ? (value.Value ? "да" : "нет") : "-";
+
+    private static bool HasPossibleModel(TrainingJobStatusResponse job)
+        => string.Equals(job.Status, "completed", StringComparison.OrdinalIgnoreCase)
+           || !string.IsNullOrWhiteSpace(job.MobileModelPath)
+           || !string.IsNullOrWhiteSpace(job.BestWeightsPath);
 
     private static bool CanBeCanceled(string? status)
         => string.Equals(status, "queued", StringComparison.OrdinalIgnoreCase)

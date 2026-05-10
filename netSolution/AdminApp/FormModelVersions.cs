@@ -26,6 +26,7 @@ public class FormModelVersions : Form
         ScrollBars = ScrollBars.Vertical,
     };
     private readonly Button _btnRefresh = new() { Text = "Обновить", Width = 120, Height = 36 };
+    private readonly Button _btnDetails = new() { Text = "Подробнее", Width = 120, Height = 36 };
     private readonly Button _btnPublish = new() { Text = "Сделать текущей", Width = 160, Height = 36 };
     private readonly Button _btnUnpublish = new() { Text = "Снять публикацию", Width = 160, Height = 36 };
     private readonly Button _btnPin = new() { Text = "Зафиксировать", Width = 140, Height = 36 };
@@ -43,6 +44,7 @@ public class FormModelVersions : Form
 
         BuildUi();
         _btnRefresh.Click += async (_, _) => await RefreshAsync();
+        _btnDetails.Click += (_, _) => OpenDetails();
         _btnPublish.Click += async (_, _) => await PublishSelectedAsync();
         _btnUnpublish.Click += async (_, _) => await UnpublishSelectedAsync();
         _btnPin.Click += async (_, _) => await PinSelectedAsync();
@@ -50,6 +52,7 @@ public class FormModelVersions : Form
         _btnDelete.Click += async (_, _) => await DeleteSelectedAsync();
         _btnClose.Click += (_, _) => Close();
         _grid.SelectionChanged += (_, _) => RenderSelected();
+        _grid.CellDoubleClick += (_, _) => OpenDetails();
         Shown += async (_, _) => await RefreshAsync();
     }
 
@@ -64,7 +67,7 @@ public class FormModelVersions : Form
             Padding = new Padding(12),
             FlowDirection = FlowDirection.LeftToRight,
         };
-        actions.Controls.AddRange([_btnRefresh, _btnPublish, _btnUnpublish, _btnPin, _btnUnpin, _btnDelete, _btnClose]);
+        actions.Controls.AddRange([_btnRefresh, _btnDetails, _btnPublish, _btnUnpublish, _btnPin, _btnUnpin, _btnDelete, _btnClose]);
 
         var split = new SplitContainer
         {
@@ -123,6 +126,15 @@ public class FormModelVersions : Form
         {
             ToggleBusy(false);
         }
+    }
+
+    private void OpenDetails()
+    {
+        var selected = GetSelected();
+        if (selected is null) return;
+
+        using var form = new FormModelVersionDetails(_api, selected.Source);
+        form.ShowDialog(this);
     }
 
     private async Task PublishSelectedAsync()
@@ -215,6 +227,7 @@ public class FormModelVersions : Form
     {
         var selected = GetSelected();
         var hasSelected = selected is not null;
+        _btnDetails.Enabled = hasSelected;
         _btnPublish.Enabled = hasSelected && !selected!.IsPublished;
         _btnUnpublish.Enabled = hasSelected && selected!.IsPublished;
         _btnPin.Enabled = hasSelected && !selected!.IsPinned;
@@ -270,6 +283,7 @@ public class FormModelVersions : Form
         _btnClose.Enabled = !busy;
         if (busy)
         {
+            _btnDetails.Enabled = false;
             _btnPublish.Enabled = false;
             _btnUnpublish.Enabled = false;
             _btnPin.Enabled = false;

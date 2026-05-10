@@ -33,7 +33,19 @@ public record TrainingJobStatusResponse(
     string? MobileFormat,
     string? MetricsJson,
     bool CancellationRequested = false,
-    string? ClientId = null
+    string? ClientId = null,
+    DateTime? AssignedAt = null,
+    DateTime? HeartbeatAt = null,
+    string? DatasetZipPath = null,
+    int? Epochs = null,
+    int? ImgSize = null,
+    int? Batch = null,
+    string? Device = null,
+    bool? ExportInt8 = null,
+    bool? ExportNms = null,
+    double? QuantizationFraction = null,
+    string? MobileModelFileName = null,
+    string? MobileModelContentType = null
 );
 
 public record TrainingClientJobResponse(
@@ -77,7 +89,8 @@ public record ModelVersionAdminResponse(
     string? MobileFormat,
     bool IsPublished,
     bool IsPinned,
-    bool IsDeleted
+    bool IsDeleted,
+    DateTime? DeletedAt = null
 );
 
 public record LatestMobileModelResponse(
