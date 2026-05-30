@@ -22,7 +22,7 @@ public partial class FormErrorReportDetails : Form
     private Button _btnRefresh = null!;
 
     private Image? _currentImage;
-    private YoloBboxDto? _currentBbox;
+    private List<YoloBboxDto> _currentBboxes = new();
 
     public FormErrorReportDetails(AdminApiClient api, int reportId)
     {
@@ -205,7 +205,7 @@ public partial class FormErrorReportDetails : Form
 
             _currentImage?.Dispose();
             _currentImage = await _api.GetFrameImageAsync(_report.Id, _currentFrameIndex);
-            _currentBbox = await _api.GetFrameBboxAsync(_report.Id, _currentFrameIndex);
+            _currentBboxes = await _api.GetFrameBboxesAsync(_report.Id, _currentFrameIndex);
 
             _pictureBox.Image = _currentImage;
             _lblFrameNumber.Text = $"Кадр {_currentFrameIndex} / {_report.FramesCount}";
@@ -289,33 +289,36 @@ public partial class FormErrorReportDetails : Form
 
     private void PictureBox_Paint(object? sender, PaintEventArgs e)
     {
-        if (_pictureBox.Image == null || _currentBbox == null)
+        if (_pictureBox.Image == null || _currentBboxes.Count == 0)
             return;
 
         var img = _pictureBox.Image;
         var imgW = img.Width;
         var imgH = img.Height;
-
-        var bboxW = (float)(_currentBbox.W * imgW);
-        var bboxH = (float)(_currentBbox.H * imgH);
-        var centerX = (float)(_currentBbox.Xc * imgW);
-        var centerY = (float)(_currentBbox.Yc * imgH);
-
-        var left = centerX - bboxW / 2f;
-        var top = centerY - bboxH / 2f;
-
         var rect = GetImageDisplayRectangle(_pictureBox);
 
         float scaleX = rect.Width / (float)imgW;
         float scaleY = rect.Height / (float)imgH;
 
-        var drawLeft = rect.X + left * scaleX;
-        var drawTop = rect.Y + top * scaleY;
-        var drawWidth = bboxW * scaleX;
-        var drawHeight = bboxH * scaleY;
-
         using var pen = new Pen(Color.Red, 3);
-        e.Graphics.DrawRectangle(pen, drawLeft, drawTop, drawWidth, drawHeight);
+
+        foreach (var bbox in _currentBboxes)
+        {
+            var bboxW = (float)(bbox.W * imgW);
+            var bboxH = (float)(bbox.H * imgH);
+            var centerX = (float)(bbox.Xc * imgW);
+            var centerY = (float)(bbox.Yc * imgH);
+
+            var left = centerX - bboxW / 2f;
+            var top = centerY - bboxH / 2f;
+
+            var drawLeft = rect.X + left * scaleX;
+            var drawTop = rect.Y + top * scaleY;
+            var drawWidth = bboxW * scaleX;
+            var drawHeight = bboxH * scaleY;
+
+            e.Graphics.DrawRectangle(pen, drawLeft, drawTop, drawWidth, drawHeight);
+        }
     }
 
     private static Rectangle GetImageDisplayRectangle(PictureBox pb)

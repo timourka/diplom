@@ -76,3 +76,6 @@ runs
 netSolution/ProductsDateAPI/uploads/
 *.vpp.lck
 /training_service/__pycache__/*
+
+datasets
+Products-Real

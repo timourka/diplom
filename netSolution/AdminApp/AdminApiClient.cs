@@ -53,16 +53,28 @@ public class AdminApiClient
         return Image.FromStream(stream);
     }
 
-    public async Task<YoloBboxDto?> GetFrameBboxAsync(int reportId, int frameIndex, CancellationToken ct = default)
+    public async Task<List<YoloBboxDto>> GetFrameBboxesAsync(int reportId, int frameIndex, CancellationToken ct = default)
     {
         using var response = await _http.GetAsync(
+            $"api/admin/error-reports/{reportId}/frames/{frameIndex}/bboxes", ct);
+
+        if (response.IsSuccessStatusCode)
+        {
+            await using var stream = await response.Content.ReadAsStreamAsync(ct);
+            var bboxes = await JsonSerializer.DeserializeAsync<List<YoloBboxDto>>(stream, _jsonOptions, ct);
+            return bboxes ?? new List<YoloBboxDto>();
+        }
+
+        // Fallback для старой версии API, где возвращалась только одна рамка.
+        using var fallbackResponse = await _http.GetAsync(
             $"api/admin/error-reports/{reportId}/frames/{frameIndex}/bbox", ct);
 
-        if (!response.IsSuccessStatusCode)
-            return null;
+        if (!fallbackResponse.IsSuccessStatusCode)
+            return new List<YoloBboxDto>();
 
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        return await JsonSerializer.DeserializeAsync<YoloBboxDto>(stream, _jsonOptions, ct);
+        await using var fallbackStream = await fallbackResponse.Content.ReadAsStreamAsync(ct);
+        var bbox = await JsonSerializer.DeserializeAsync<YoloBboxDto>(fallbackStream, _jsonOptions, ct);
+        return bbox is null ? new List<YoloBboxDto>() : new List<YoloBboxDto> { bbox };
     }
 
     public async Task SetReportApprovedAsync(int reportId, bool approved, CancellationToken ct = default)

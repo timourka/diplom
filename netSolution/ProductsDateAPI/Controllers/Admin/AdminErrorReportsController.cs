@@ -121,6 +121,26 @@ public class AdminErrorReportsController : ControllerBase
         int frameIndex,
         CancellationToken ct = default)
     {
+        var bboxesResult = await GetFrameBboxes(reportId, frameIndex, ct);
+
+        if (bboxesResult.Result is not null)
+            return bboxesResult.Result;
+
+        var bboxes = bboxesResult.Value ?? new List<YoloBboxDto>();
+        var first = bboxes.FirstOrDefault();
+
+        if (first is null)
+            return NotFound("BBox label not found or empty.");
+
+        return Ok(first);
+    }
+
+    [HttpGet("{reportId:int}/frames/{frameIndex:int}/bboxes")]
+    public async Task<ActionResult<List<YoloBboxDto>>> GetFrameBboxes(
+        int reportId,
+        int frameIndex,
+        CancellationToken ct = default)
+    {
         if (frameIndex <= 0)
             return BadRequest("frameIndex must be >= 1.");
 
@@ -146,27 +166,32 @@ public class AdminErrorReportsController : ControllerBase
         if (!System.IO.File.Exists(labelPath))
             return NotFound("BBox label not found.");
 
-        var line = await System.IO.File.ReadAllTextAsync(labelPath, ct);
-        if (string.IsNullOrWhiteSpace(line))
-            return BadRequest("BBox label file is empty.");
+        var lines = await System.IO.File.ReadAllLinesAsync(labelPath, ct);
+        var bboxes = new List<YoloBboxDto>();
 
-        var parts = line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length < 5)
-            return BadRequest("Invalid YOLO label format.");
+        foreach (var line in lines.Where(x => !string.IsNullOrWhiteSpace(x)))
+        {
+            var parts = line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
-        if (!int.TryParse(parts[0], out var classId))
-            return BadRequest("Invalid classId.");
+            if (parts.Length < 5)
+                continue;
 
-        if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var xc))
-            return BadRequest("Invalid xc.");
-        if (!double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var yc))
-            return BadRequest("Invalid yc.");
-        if (!double.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out var w))
-            return BadRequest("Invalid w.");
-        if (!double.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out var h))
-            return BadRequest("Invalid h.");
+            if (!int.TryParse(parts[0], out var classId))
+                continue;
 
-        return Ok(new YoloBboxDto(classId, xc, yc, w, h));
+            if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var xc))
+                continue;
+            if (!double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var yc))
+                continue;
+            if (!double.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out var w))
+                continue;
+            if (!double.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out var h))
+                continue;
+
+            bboxes.Add(new YoloBboxDto(classId, xc, yc, w, h));
+        }
+
+        return Ok(bboxes);
     }
 
     [HttpPut("{reportId:int}/approve")]
