@@ -19,6 +19,7 @@ class TfliteDateDetector {
   ReceivePort? _receivePort;
   SendPort? _workerSendPort;
   String? _loadedModelPath;
+  String? _loadedModelSignature;
   int _nextRequestId = 1;
   final Map<int, Completer<DetectionFrameResult>> _pendingRequests = {};
 
@@ -34,16 +35,19 @@ class TfliteDateDetector {
       return false;
     }
 
-    if (_loadedModelPath == modelPath && _workerSendPort != null) {
-      return true;
-    }
-
-    close();
-
     final file = File(modelPath);
     if (!await file.exists()) {
       return false;
     }
+
+    final modelSignature = await _fileSignature(file);
+    if (_loadedModelPath == modelPath &&
+        _loadedModelSignature == modelSignature &&
+        _workerSendPort != null) {
+      return true;
+    }
+
+    close();
 
     final receivePort = ReceivePort();
     final readyPortCompleter = Completer<SendPort>();
@@ -111,6 +115,7 @@ class TfliteDateDetector {
     _receivePort = receivePort;
     _workerSendPort = workerSendPort;
     _loadedModelPath = modelPath;
+    _loadedModelSignature = modelSignature;
 
     workerSendPort.send({
       'type': 'init',
@@ -184,6 +189,12 @@ class TfliteDateDetector {
     _workerIsolate?.kill(priority: Isolate.immediate);
     _workerIsolate = null;
     _loadedModelPath = null;
+    _loadedModelSignature = null;
+  }
+
+  Future<String> _fileSignature(File file) async {
+    final stat = await file.stat();
+    return '${file.path}|${stat.size}|${stat.modified.microsecondsSinceEpoch}';
   }
 }
 
@@ -236,6 +247,15 @@ void _detectorWorkerEntry(SendPort mainSendPort) async {
         final outputParams = outputTensor.params;
         outputScale = outputParams.scale == 0 ? 1.0 : outputParams.scale;
         outputZeroPoint = outputParams.zeroPoint;
+
+        developer.log(
+          'TFLite model loaded. '
+          'inputShape=${inputTensor.shape}, inputType=$inputType, '
+          'inputScale=$inputScale, inputZeroPoint=$inputZeroPoint; '
+          'outputShape=${outputTensor.shape}, outputType=$outputType, '
+          'outputScale=$outputScale, outputZeroPoint=$outputZeroPoint',
+          name: 'AI',
+        );
 
         interpreter = created;
         mainSendPort.send({'type': 'inited', 'ok': true});
@@ -315,37 +335,28 @@ void _detectorWorkerEntry(SendPort mainSendPort) async {
 
         List<Map<String, Object>> detections;
         final tensorSw = Stopwatch()..start();
-        if (inputType == TensorType.int8) {
-          final inputData = _buildInt8Input(prep.image, inputSize, inputScale, inputZeroPoint);
-          tensorSw.stop();
-          perf['tensorBuildMs'] = tensorSw.elapsedMilliseconds;
 
-          final output = _createOutputContainerInt(outputShape);
-          final inferSw = Stopwatch()..start();
-          activeInterpreter.run(inputData, output);
-          inferSw.stop();
-          perf['inferMs'] = inferSw.elapsedMilliseconds;
+        final inputData = _isQuantizedTensor(inputType)
+            ? _buildQuantizedInput(prep.image, inputSize, inputScale, inputZeroPoint, inputType)
+            : _buildFloatInput(prep.image, inputSize);
+        tensorSw.stop();
+        perf['tensorBuildMs'] = tensorSw.elapsedMilliseconds;
 
-          final postSw = Stopwatch()..start();
-          detections = _parseOutputInt8(output, prep, inputSize, outputScale, outputZeroPoint);
-          postSw.stop();
-          perf['postprocessMs'] = postSw.elapsedMilliseconds;
-        } else {
-          final inputData = _buildFloatInput(prep.image, inputSize);
-          tensorSw.stop();
-          perf['tensorBuildMs'] = tensorSw.elapsedMilliseconds;
+        final output = _isQuantizedTensor(outputType)
+            ? _createOutputContainerInt(outputShape, outputZeroPoint)
+            : _createOutputContainerFloat(outputShape);
 
-          final output = _createOutputContainerFloat(outputShape);
-          final inferSw = Stopwatch()..start();
-          activeInterpreter.run(inputData, output);
-          inferSw.stop();
-          perf['inferMs'] = inferSw.elapsedMilliseconds;
+        final inferSw = Stopwatch()..start();
+        activeInterpreter.run(inputData, output);
+        inferSw.stop();
+        perf['inferMs'] = inferSw.elapsedMilliseconds;
 
-          final postSw = Stopwatch()..start();
-          detections = _parseOutputFloat(output, prep, inputSize);
-          postSw.stop();
-          perf['postprocessMs'] = postSw.elapsedMilliseconds;
-        }
+        final postSw = Stopwatch()..start();
+        detections = _isQuantizedTensor(outputType)
+            ? _parseOutputInt(output, prep, inputSize, outputScale, outputZeroPoint)
+            : _parseOutputFloat(output, prep, inputSize);
+        postSw.stop();
+        perf['postprocessMs'] = postSw.elapsedMilliseconds;
 
         totalSw.stop();
         perf['totalMs'] = totalSw.elapsedMilliseconds;
@@ -510,11 +521,12 @@ List<List<List<List<double>>>> _buildFloatInput(img.Image image, int inputSize) 
   ];
 }
 
-List<List<List<List<int>>>> _buildInt8Input(
+List<List<List<List<int>>>> _buildQuantizedInput(
   img.Image image,
   int inputSize,
   double inputScale,
   int inputZeroPoint,
+  TensorType inputType,
 ) {
   final rgbBytes = image.getBytes(order: img.ChannelOrder.rgb);
   var offset = 0;
@@ -525,9 +537,9 @@ List<List<List<List<int>>>> _buildInt8Input(
       (_) => List.generate(
         inputSize,
         (_) {
-          final r = _quantizeInput(rgbBytes[offset], inputScale, inputZeroPoint);
-          final g = _quantizeInput(rgbBytes[offset + 1], inputScale, inputZeroPoint);
-          final b = _quantizeInput(rgbBytes[offset + 2], inputScale, inputZeroPoint);
+          final r = _quantizeInput(rgbBytes[offset], inputScale, inputZeroPoint, inputType);
+          final g = _quantizeInput(rgbBytes[offset + 1], inputScale, inputZeroPoint, inputType);
+          final b = _quantizeInput(rgbBytes[offset + 2], inputScale, inputZeroPoint, inputType);
           offset += 3;
           return <int>[r, g, b];
         },
@@ -538,10 +550,22 @@ List<List<List<List<int>>>> _buildInt8Input(
   ];
 }
 
-int _quantizeInput(int channelValue, double inputScale, int inputZeroPoint) {
+int _quantizeInput(
+  int channelValue,
+  double inputScale,
+  int inputZeroPoint,
+  TensorType inputType,
+) {
   final normalized = channelValue / 255.0;
   final quantized = (normalized / inputScale + inputZeroPoint).round();
+  if (inputType == TensorType.uint8) {
+    return quantized.clamp(0, 255);
+  }
   return quantized.clamp(-128, 127);
+}
+
+bool _isQuantizedTensor(TensorType type) {
+  return type == TensorType.int8 || type == TensorType.uint8;
 }
 
 dynamic _createOutputContainerFloat(List<int> shape) {
@@ -568,13 +592,16 @@ dynamic _createOutputContainerFloat(List<int> shape) {
   throw UnsupportedError('Unsupported float output shape: $shape');
 }
 
-dynamic _createOutputContainerInt(List<int> shape) {
+dynamic _createOutputContainerInt(List<int> shape, int zeroPoint) {
+  // Важно: для quantized output значение float 0.0 кодируется не всегда как int 0,
+  // а как zeroPoint. Если заполнить буфер нулями, неинициализированные/пустые
+  // строки NMS могут после dequantization стать score≈1.0 и рисоваться как 100%.
   if (shape.length == 3) {
     return List.generate(
       shape[0],
       (_) => List.generate(
         shape[1],
-        (_) => List<int>.filled(shape[2], 0, growable: false),
+        (_) => List<int>.filled(shape[2], zeroPoint, growable: false),
         growable: false,
       ),
       growable: false,
@@ -584,7 +611,7 @@ dynamic _createOutputContainerInt(List<int> shape) {
   if (shape.length == 2) {
     return List.generate(
       shape[0],
-      (_) => List<int>.filled(shape[1], 0, growable: false),
+      (_) => List<int>.filled(shape[1], zeroPoint, growable: false),
       growable: false,
     );
   }
@@ -593,7 +620,11 @@ dynamic _createOutputContainerInt(List<int> shape) {
 }
 
 List<Map<String, Object>> _parseOutputFloat(dynamic output, _LetterboxResult prep, int inputSize) {
-  const confidenceThreshold = 0.05;
+  // На ПК ты запускал predict с conf=0.5 и получил нормальные 0.62/0.52.
+  // Поэтому в мобильном приложении нельзя держать 0.05: это пропускает мусорные кандидаты.
+  const confidenceThreshold = 0.50;
+  const maxDetections = 3;
+
   final rows = _extractFloatRows(output);
   final results = <Map<String, Object>>[];
 
@@ -601,22 +632,49 @@ List<Map<String, Object>> _parseOutputFloat(dynamic output, _LetterboxResult pre
     if (row.length < 6) continue;
 
     final confidence = row[4];
-    if (confidence < confidenceThreshold) {
+    if (confidence.isNaN || confidence < confidenceThreshold || confidence > 1.0001) {
       continue;
     }
 
-    final left = _mapX(row[0], prep, inputSize);
-    final top = _mapY(row[1], prep, inputSize);
-    final right = _mapX(row[2], prep, inputSize);
-    final bottom = _mapY(row[3], prep, inputSize);
+    final classIndex = row[5].round();
+    if (classIndex != 0) {
+      continue;
+    }
+
+    // Ultralytics TFLite с nms=True обычно отдаёт [x1, y1, x2, y2, score, class].
+    // На всякий случай ниже есть fallback для [cx, cy, w, h, score, class].
+    var left = _mapX(row[0], prep, inputSize);
+    var top = _mapY(row[1], prep, inputSize);
+    var right = _mapX(row[2], prep, inputSize);
+    var bottom = _mapY(row[3], prep, inputSize);
+
+    if (right <= left || bottom <= top) {
+      final cx = row[0];
+      final cy = row[1];
+      final w = row[2];
+      final h = row[3];
+      left = _mapX(cx - w / 2.0, prep, inputSize);
+      top = _mapY(cy - h / 2.0, prep, inputSize);
+      right = _mapX(cx + w / 2.0, prep, inputSize);
+      bottom = _mapY(cy + h / 2.0, prep, inputSize);
+    }
 
     if (right <= left || bottom <= top) {
       continue;
     }
 
+    final boxWidth = right - left;
+    final boxHeight = bottom - top;
+    final area = boxWidth * boxHeight;
+    final aspect = boxWidth / boxHeight;
+
+    // Дата — мелкая горизонтальная строка. Эти фильтры убирают большие/квадратные ложные рамки.
+    if (area < 0.00002 || area > 0.25) continue;
+    if (aspect < 1.2) continue;
+
     results.add({
-      'confidence': confidence,
-      'classIndex': row[5].round(),
+      'confidence': confidence.clamp(0.0, 1.0),
+      'classIndex': classIndex,
       'left': left,
       'top': top,
       'right': right,
@@ -627,10 +685,10 @@ List<Map<String, Object>> _parseOutputFloat(dynamic output, _LetterboxResult pre
   results.sort(
     (a, b) => ((b['confidence'] as num).toDouble()).compareTo((a['confidence'] as num).toDouble()),
   );
-  return results.take(10).toList(growable: false);
+  return results.take(maxDetections).toList(growable: false);
 }
 
-List<Map<String, Object>> _parseOutputInt8(
+List<Map<String, Object>> _parseOutputInt(
   dynamic output,
   _LetterboxResult prep,
   int inputSize,

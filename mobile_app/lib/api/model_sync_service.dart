@@ -87,7 +87,7 @@ class ModelSyncService {
       final modelsDir = await _modelsDirectory();
       final format = (remoteInfo['mobileFormat']?.toString() ?? 'tflite').toLowerCase();
       final remoteFileName = remoteInfo['fileName']?.toString();
-      final safeFileName = _safeModelFileName(remoteFileName, format);
+      final safeFileName = _safeModelFileName(remoteFileName, format, latestVersion);
       final file = File('${modelsDir.path}/$safeFileName');
       await file.writeAsBytes(modelResponse.bodyBytes, flush: true);
 
@@ -208,8 +208,9 @@ class ModelSyncService {
     return int.tryParse(value?.toString() ?? '');
   }
 
-  String _safeModelFileName(String? remoteFileName, String format) {
-    final fallback = 'latest_model.$format';
+  String _safeModelFileName(String? remoteFileName, String format, int version) {
+    final normalizedFormat = format.trim().isEmpty ? 'tflite' : format.trim().toLowerCase();
+    final fallback = 'mobile_model_v$version.$normalizedFormat';
     if (remoteFileName == null || remoteFileName.trim().isEmpty) {
       return fallback;
     }
@@ -219,7 +220,11 @@ class ModelSyncService {
       return fallback;
     }
 
-    return 'published_$cleaned';
+    final dotIndex = cleaned.lastIndexOf('.');
+    final extension = dotIndex >= 0 ? cleaned.substring(dotIndex).toLowerCase() : '.$normalizedFormat';
+    final base = dotIndex >= 0 ? cleaned.substring(0, dotIndex) : cleaned;
+    final safeBase = base.replaceAll(RegExp(r'[^A-Za-z0-9_.-]+'), '_');
+    return 'model_v${version}_$safeBase$extension';
   }
 
   String prettyMetrics(String? raw) {
