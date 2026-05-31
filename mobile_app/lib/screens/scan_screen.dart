@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/painting.dart';
+import 'package:image/image.dart' as img;
 
+import '../ai/date_ocr_service.dart';
 import '../ai/detection_result.dart';
 import '../ai/tflite_date_detector.dart';
 import '../api/model_sync_service.dart';
@@ -31,28 +34,45 @@ class ScanScreen extends StatefulWidget {
   State<ScanScreen> createState() => _ScanScreenState();
 }
 
-class _ScanScreenState extends State<ScanScreen> {
+class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   CameraController? _controller;
   Future<void>? _initFuture;
   CameraDescription? _selectedCamera;
 
   final _modelSync = ModelSyncService();
   late final TfliteDateDetector _detector;
+  late final DateOcrService _dateOcr;
 
   bool _aiReady = false;
   bool _aiBusy = false;
+  bool _scanActive = false;
+  bool _coveredByChildRoute = false;
+  bool _initializingCamera = false;
+  bool _resumeRequestedAfterInit = false;
+  int _cameraEpoch = 0;
+  int _previewKeySeed = 0;
   String _aiStatus = 'Подготовка ИИ...';
   DateTime? _lastInferenceAt;
   Duration? _lastInferenceDuration;
   FramePerf _lastPerf = const FramePerf();
   List<DetectionResult> _detections = const [];
+  bool _magnifierBusy = false;
+  int _magnifierEpoch = 0;
+  File? _magnifierImageFile;
+  String _magnifierStatus = '';
+  DetectionResult? _magnifierSourceDetection;
+  DateTime? _magnifierRecognizedDate;
+  String? _magnifierRecognizedDateText;
+  bool _manualAddSheetOpen = false;
   Map<String, dynamic>? _localModelInfo;
   DateTime _lastInferenceStarted = DateTime.fromMillisecondsSinceEpoch(0);
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _detector = TfliteDateDetector(modelSyncService: _modelSync);
+    _dateOcr = DateOcrService();
     if (widget.startupError != null && widget.startupError!.isNotEmpty) {
       _aiStatus = widget.startupError!;
     }
@@ -79,19 +99,40 @@ class _ScanScreenState extends State<ScanScreen> {
     }
   }
 
-  Future<void> _initialize() async {
-    if (widget.cameras.isEmpty) {
-      if (mounted) {
-        setState(() => _aiStatus = 'Камера не найдена или нет разрешения на камеру.');
-      }
+  Future<void> _initialize({bool forceRecreate = false}) async {
+    if (_initializingCamera) {
+      _resumeRequestedAfterInit = true;
       return;
     }
 
+    _initializingCamera = true;
+
     try {
+      if (forceRecreate) {
+        await _disposeCameraController(updateState: false);
+      }
+
+      if (widget.cameras.isEmpty) {
+        if (mounted) {
+          setState(() => _aiStatus = 'Камера не найдена или нет разрешения на камеру.');
+        }
+        return;
+      }
+
+      if (_coveredByChildRoute) {
+        return;
+      }
+
+      if (!forceRecreate && _controller != null && _controller!.value.isInitialized) {
+        await _refreshAiState();
+        return;
+      }
+
       final back = widget.cameras.where((c) => c.lensDirection == CameraLensDirection.back);
       final cam = back.isNotEmpty ? back.first : widget.cameras.first;
       _selectedCamera = cam;
 
+      final localEpoch = ++_cameraEpoch;
       final controller = CameraController(
         cam,
         ResolutionPreset.low,
@@ -101,14 +142,30 @@ class _ScanScreenState extends State<ScanScreen> {
 
       _controller = controller;
       _initFuture = controller.initialize();
-      if (mounted) setState(() {});
+      _previewKeySeed++;
+      if (mounted) {
+        setState(() {
+          _detections = const [];
+          _lastInferenceAt = null;
+          _aiStatus = 'Запускаю камеру...';
+        });
+      }
 
       await _initFuture;
+
+      if (!mounted || _coveredByChildRoute || localEpoch != _cameraEpoch) {
+        try {
+          await controller.dispose();
+        } catch (_) {
+          // Controller was superseded or the route is covered; native camera will be released by dispose.
+        }
+        return;
+      }
 
       _localModelInfo = await _modelSync.readLocalModelInfo();
       final ready = await _detector.loadLatestModel();
 
-      if (!mounted) return;
+      if (!mounted || _coveredByChildRoute || localEpoch != _cameraEpoch) return;
 
       setState(() {
         _aiReady = ready;
@@ -118,28 +175,175 @@ class _ScanScreenState extends State<ScanScreen> {
       });
 
       if (ready) {
-        await _startImageStream();
+        await _startImageStream(expectedEpoch: localEpoch);
       }
     } catch (e) {
-      await _controller?.dispose();
+      await _disposeCameraController(updateState: false);
       if (!mounted) return;
       setState(() {
         _controller = null;
         _initFuture = null;
         _aiReady = false;
+        _scanActive = false;
         _aiStatus = 'Ошибка запуска камеры: $e';
       });
+    } finally {
+      _initializingCamera = false;
+      if (_resumeRequestedAfterInit && mounted && !_coveredByChildRoute) {
+        _resumeRequestedAfterInit = false;
+        unawaited(_resumeScanning(recreateCamera: true));
+      } else {
+        _resumeRequestedAfterInit = false;
+      }
     }
   }
 
-  Future<void> _startImageStream() async {
+  Future<void> _stopImageStreamIfNeeded() async {
     final controller = _controller;
-    if (controller == null || controller.value.isStreamingImages) {
+    if (controller == null || !controller.value.isInitialized || !controller.value.isStreamingImages) {
       return;
     }
 
+    try {
+      await controller.stopImageStream();
+    } catch (_) {
+      // The camera plugin may throw if the stream is already stopping/disposed.
+    }
+  }
+
+  Future<void> _disposeCameraController({bool updateState = true}) async {
+    _scanActive = false;
+    _aiBusy = false;
+    _cameraEpoch++;
+
+    final controller = _controller;
+    _controller = null;
+    _initFuture = null;
+    _previewKeySeed++;
+
+    if (updateState && mounted) {
+      setState(() {
+        _detections = const [];
+        _lastInferenceAt = null;
+      });
+    }
+
+    if (controller == null) return;
+
+    try {
+      if (controller.value.isInitialized && controller.value.isStreamingImages) {
+        await controller.stopImageStream();
+      }
+    } catch (_) {
+      // Ignore stop errors during disposal; disposing releases the native camera.
+    }
+
+    try {
+      await controller.dispose();
+    } catch (_) {
+      // Ignore double-dispose/native disposal races.
+    }
+  }
+
+  Future<void> _pauseScanning({bool releaseCamera = false}) async {
+    _scanActive = false;
+    _aiBusy = false;
+    _cameraEpoch++;
+
+    if (mounted) {
+      setState(() {
+        _detections = const [];
+        _aiStatus = releaseCamera ? 'Камера освобождена для другого экрана.' : 'Сканирование приостановлено.';
+      });
+    }
+
+    if (releaseCamera) {
+      await _disposeCameraController(updateState: true);
+    } else {
+      await _stopImageStreamIfNeeded();
+    }
+  }
+
+  Future<void> _resumeScanning({required bool recreateCamera}) async {
+    if (!mounted || _coveredByChildRoute || _magnifierActive) return;
+
+    // Дожидаемся первого кадра после закрытия route, чтобы CameraPreview получил новый Surface,
+    // а предыдущий экран успел освободить CameraX use cases до инициализации новой камеры.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || _coveredByChildRoute) return;
+
+    if (recreateCamera || _controller == null || !_controller!.value.isInitialized) {
+      await _initialize(forceRecreate: recreateCamera);
+    } else {
+      await _refreshAiState();
+    }
+  }
+
+  Future<T?> _pushWithScanPaused<T>(Route<T> route, {bool releaseCamera = false}) async {
+    _coveredByChildRoute = true;
+    await _pauseScanning(releaseCamera: releaseCamera);
+
+    try {
+      return await Navigator.push(context, route);
+    } finally {
+      _coveredByChildRoute = false;
+      await _resumeScanning(recreateCamera: releaseCamera);
+    }
+  }
+
+  Future<T?> _showModalWithScanPaused<T>(Future<T?> Function() show) async {
+    _coveredByChildRoute = true;
+    await _pauseScanning(releaseCamera: false);
+
+    try {
+      return await show();
+    } finally {
+      _coveredByChildRoute = false;
+      await _resumeScanning(recreateCamera: false);
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached ||
+        state == AppLifecycleState.hidden) {
+      unawaited(_pauseScanning(releaseCamera: true));
+      return;
+    }
+
+    if (state == AppLifecycleState.resumed && !_coveredByChildRoute && !_magnifierActive) {
+      unawaited(_resumeScanning(recreateCamera: true));
+    }
+  }
+
+  Future<void> _startImageStream({int? expectedEpoch}) async {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized || _coveredByChildRoute) {
+      _scanActive = false;
+      return;
+    }
+
+    if (controller.value.isStreamingImages) {
+      if (_scanActive) return;
+      try {
+        await controller.stopImageStream();
+      } catch (_) {
+        // If plugin reports stale streaming state, recreate the camera cleanly.
+        await _disposeCameraController(updateState: true);
+        if (mounted && !_coveredByChildRoute) {
+          await _initialize(forceRecreate: true);
+        }
+        return;
+      }
+    }
+
+    final streamEpoch = expectedEpoch ?? _cameraEpoch;
+    _scanActive = true;
+
     await controller.startImageStream((image) async {
-      if (!_aiReady || _aiBusy || !mounted) {
+      if (!_scanActive || _cameraEpoch != streamEpoch || !_aiReady || _aiBusy || !mounted) {
         return;
       }
 
@@ -159,7 +363,7 @@ class _ScanScreenState extends State<ScanScreen> {
           rotationDegrees: rotationDegrees,
           mirrorHorizontally: mirror,
         );
-        if (!mounted) return;
+        if (!mounted || !_scanActive || _cameraEpoch != streamEpoch) return;
 
         final detections = frameResult.detections;
         final perf = frameResult.perf;
@@ -183,76 +387,571 @@ class _ScanScreenState extends State<ScanScreen> {
           }
         });
       } on TimeoutException {
-        if (!mounted) return;
+        if (!mounted || !_scanActive || _cameraEpoch != streamEpoch) return;
         setState(() {
           _lastPerf = const FramePerf();
           _aiStatus = 'Кадр пропущен: ИИ не успела завершить анализ вовремя.';
         });
       } catch (e) {
-        if (!mounted) return;
+        if (!mounted || !_scanActive || _cameraEpoch != streamEpoch) return;
         setState(() {
           _lastPerf = const FramePerf();
           _aiStatus = 'Ошибка ИИ: $e';
         });
       } finally {
-        _aiBusy = false;
+        if (_cameraEpoch == streamEpoch) {
+          _aiBusy = false;
+        }
       }
     });
   }
 
+
+  bool get _magnifierActive => _magnifierBusy || _magnifierImageFile != null;
+
+  Rect _displayRectForDetection(DetectionResult detection, Size viewportSize, Size previewContentSize) {
+    if (previewContentSize.isEmpty || viewportSize.isEmpty) {
+      return Rect.zero;
+    }
+
+    final fittedSizes = applyBoxFit(BoxFit.cover, previewContentSize, viewportSize);
+    final destination = fittedSizes.destination;
+    final dx = (viewportSize.width - destination.width) / 2;
+    final dy = (viewportSize.height - destination.height) / 2;
+    final dstRect = Offset(dx, dy) & destination;
+
+    return Rect.fromLTRB(
+      dstRect.left + detection.left * dstRect.width,
+      dstRect.top + detection.top * dstRect.height,
+      dstRect.left + detection.right * dstRect.width,
+      dstRect.top + detection.bottom * dstRect.height,
+    );
+  }
+
+  DetectionResult? _hitTestDetection(Offset position, Size viewportSize, Size previewContentSize) {
+    if (_detections.isEmpty) return null;
+
+    final hits = <({DetectionResult detection, Rect rect})>[];
+    for (final detection in _detections) {
+      final rect = _displayRectForDetection(detection, viewportSize, previewContentSize).inflate(14);
+      if (rect.contains(position)) {
+        hits.add((detection: detection, rect: rect));
+      }
+    }
+
+    if (hits.isEmpty) return null;
+    hits.sort((a, b) => (a.rect.width * a.rect.height).compareTo(b.rect.width * b.rect.height));
+    return hits.first.detection;
+  }
+
+  Future<void> _onDetectionTap(DetectionResult detection) async {
+    if (_magnifierBusy || !mounted) return;
+
+    final magnifierEpoch = ++_magnifierEpoch;
+
+    setState(() {
+      _magnifierBusy = true;
+      _magnifierStatus = 'Делаю снимок высокого разрешения и уточняю границы даты...';
+      _magnifierSourceDetection = detection;
+      _magnifierImageFile = null;
+      _magnifierRecognizedDate = null;
+      _magnifierRecognizedDateText = null;
+    });
+
+    XFile? highResShot;
+    File? cropFile;
+
+    try {
+      await _pauseScanning(releaseCamera: true);
+      // Даём CameraX на Android немного времени закрыть предыдущую сессию перед новым high-res capture.
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+
+      highResShot = await _captureHighResolutionStill(focusDetection: detection);
+
+      if (!mounted || magnifierEpoch != _magnifierEpoch) {
+        try {
+          await File(highResShot.path).delete();
+        } catch (_) {}
+        return;
+      }
+      setState(() {
+        _magnifierStatus = 'Уточняю границы даты на снимке высокого разрешения...';
+      });
+
+      final refined = await _detector.detectFromImageFile(
+        highResShot.path,
+        focusRegion: detection,
+        focusPadding: 1.6,
+        confidenceThreshold: 0.01,
+        maxDetections: 30,
+        strictGeometryFilters: false,
+      );
+
+      final refinedDetection = _pickBestRefinedDetection(refined.detections, detection);
+      final hasRefinedDetection = refinedDetection != null;
+      cropFile = await _createMagnifierCrop(
+        imagePath: highResShot.path,
+        detection: refinedDetection ?? detection,
+        fallbackDetection: detection,
+        refined: hasRefinedDetection,
+      );
+
+      try {
+        await File(highResShot.path).delete();
+      } catch (_) {
+        // Temporary camera file cleanup is best-effort.
+      }
+
+      DateOcrResult? ocrResult;
+      try {
+        if (cropFile != null) {
+          ocrResult = await _dateOcr.recognizeDateFromImagePath(cropFile.path);
+        }
+      } catch (_) {
+        ocrResult = null;
+      }
+
+      if (!mounted || magnifierEpoch != _magnifierEpoch) {
+        try {
+          if (cropFile != null && await cropFile.exists()) await cropFile.delete();
+        } catch (_) {}
+        return;
+      }
+
+      final recognizedDate = ocrResult?.date;
+      final recognizedText = ocrResult?.matchedText;
+      final baseStatus = hasRefinedDetection
+          ? 'Область уточнена на снимке высокого разрешения. Уверенность: '
+              '${((refinedDetection.confidence) * 100).toStringAsFixed(1)}%.'
+          : 'Показан фрагмент по месту клика.';
+
+      setState(() {
+        _magnifierBusy = false;
+        _magnifierImageFile = cropFile;
+        _magnifierRecognizedDate = recognizedDate;
+        _magnifierRecognizedDateText = recognizedText;
+        _magnifierStatus = recognizedDate == null
+            ? '$baseStatus Дата не распознана.'
+            : '$baseStatus Распознана дата: ${_formatDateRu(recognizedDate)}.';
+      });
+
+      if (recognizedDate != null) {
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+        if (mounted && magnifierEpoch == _magnifierEpoch && _magnifierImageFile != null) {
+          unawaited(_openManualAdd(initialExpiry: recognizedDate, keepMagnifier: true));
+        }
+      } else {
+        _showSnackBar('Дата не распознана');
+      }
+    } catch (e) {
+      try {
+        if (highResShot != null) await File(highResShot.path).delete();
+      } catch (_) {}
+      try {
+        if (cropFile != null && await cropFile.exists()) await cropFile.delete();
+      } catch (_) {}
+
+      if (!mounted || magnifierEpoch != _magnifierEpoch) {
+        try {
+          if (cropFile != null && await cropFile.exists()) await cropFile.delete();
+        } catch (_) {}
+        return;
+      }
+      setState(() {
+        _magnifierBusy = false;
+        _magnifierImageFile = null;
+        _magnifierSourceDetection = null;
+        _magnifierRecognizedDate = null;
+        _magnifierRecognizedDateText = null;
+        _magnifierStatus = '';
+        _aiStatus = 'Не удалось открыть лупу: $e';
+      });
+      await _resumeScanning(recreateCamera: true);
+    }
+  }
+
+  DetectionResult? _pickBestRefinedDetection(
+    List<DetectionResult> candidates,
+    DetectionResult source,
+  ) {
+    if (candidates.isEmpty) return null;
+
+    final sourceCenterX = (source.left + source.right) / 2.0;
+    final sourceCenterY = (source.top + source.bottom) / 2.0;
+    final sourceW = math.max(0.001, source.right - source.left);
+    final sourceH = math.max(0.001, source.bottom - source.top);
+    final expandedSource = Rect.fromLTRB(
+      (source.left - sourceW * 1.2).clamp(0.0, 1.0).toDouble(),
+      (source.top - sourceH * 2.0).clamp(0.0, 1.0).toDouble(),
+      (source.right + sourceW * 1.2).clamp(0.0, 1.0).toDouble(),
+      (source.bottom + sourceH * 2.0).clamp(0.0, 1.0).toDouble(),
+    );
+
+    final scored = candidates.map((candidate) {
+      final centerX = (candidate.left + candidate.right) / 2.0;
+      final centerY = (candidate.top + candidate.bottom) / 2.0;
+      final dx = (centerX - sourceCenterX) / math.max(0.05, sourceW * 2.0);
+      final dy = (centerY - sourceCenterY) / math.max(0.05, sourceH * 4.0);
+      final distance = math.sqrt(dx * dx + dy * dy);
+      final candidateCenter = Offset(centerX, centerY);
+      final insideBonus = expandedSource.contains(candidateCenter) ? 0.35 : 0.0;
+      final score = candidate.confidence + insideBonus - distance * 0.22;
+      return (candidate: candidate, score: score);
+    }).toList(growable: false)
+      ..sort((a, b) => b.score.compareTo(a.score));
+
+    final best = scored.first;
+    // Если лучший кандидат совсем далеко от точки клика, лучше показать исходный фрагмент,
+    // чем уверенно обрезать чужой текст на упаковке.
+    if (best.score < -0.35) return null;
+    return best.candidate;
+  }
+
+  Future<XFile> _captureHighResolutionStill({DetectionResult? focusDetection}) async {
+    if (widget.cameras.isEmpty) {
+      throw StateError('Камера не найдена.');
+    }
+
+    final cam = _selectedCamera ??
+        widget.cameras.firstWhere(
+          (c) => c.lensDirection == CameraLensDirection.back,
+          orElse: () => widget.cameras.first,
+        );
+
+    final highResController = CameraController(
+      cam,
+      ResolutionPreset.max,
+      enableAudio: false,
+      imageFormatGroup: ImageFormatGroup.jpeg,
+    );
+
+    try {
+      await highResController.initialize();
+      try {
+        await highResController.setFlashMode(FlashMode.off);
+      } catch (_) {
+        // Not all devices support explicit flash configuration for this temporary controller.
+      }
+
+      final focus = focusDetection;
+      if (focus != null) {
+        final focusPoint = Offset(
+          ((focus.left + focus.right) / 2.0).clamp(0.0, 1.0).toDouble(),
+          ((focus.top + focus.bottom) / 2.0).clamp(0.0, 1.0).toDouble(),
+        );
+
+        try {
+          await highResController.setFocusMode(FocusMode.auto);
+        } catch (_) {}
+        try {
+          await highResController.setExposureMode(ExposureMode.auto);
+        } catch (_) {}
+        try {
+          await highResController.setFocusPoint(focusPoint);
+        } catch (_) {}
+        try {
+          await highResController.setExposurePoint(focusPoint);
+        } catch (_) {}
+
+        // Flutter camera не отдаёт событие "фокус навёлся". Поэтому не ждём фиксированную секунду:
+        // даём короткую паузу только на применение focus/exposure point и сразу снимаем.
+        await Future<void>.delayed(const Duration(milliseconds: 180));
+      } else {
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+      }
+
+      return await highResController.takePicture();
+    } finally {
+      try {
+        await highResController.dispose();
+      } catch (_) {}
+    }
+  }
+
+  Future<File> _createMagnifierCrop({
+    required String imagePath,
+    required DetectionResult detection,
+    required DetectionResult fallbackDetection,
+    required bool refined,
+  }) async {
+    final sourceBytes = await File(imagePath).readAsBytes();
+    final decoded = img.decodeImage(sourceBytes);
+    if (decoded == null) {
+      throw StateError('Не удалось прочитать снимок высокого разрешения.');
+    }
+
+    final oriented = img.bakeOrientation(decoded);
+    final cropRect = _normalizedDetectionToCropRect(
+      refined ? detection : fallbackDetection,
+      oriented.width,
+      oriented.height,
+      padding: refined ? 0.20 : 0.30,
+    );
+
+    final cropped = img.copyCrop(
+      oriented,
+      x: cropRect.left.round(),
+      y: cropRect.top.round(),
+      width: math.max(1, cropRect.width.round()),
+      height: math.max(1, cropRect.height.round()),
+    );
+
+    final outPath = '${imagePath}_date_magnifier.jpg';
+    final outFile = File(outPath);
+    await outFile.writeAsBytes(img.encodeJpg(cropped, quality: 95), flush: true);
+    return outFile;
+  }
+
+  Rect _normalizedDetectionToCropRect(
+    DetectionResult detection,
+    int imageWidth,
+    int imageHeight, {
+    required double padding,
+  }) {
+    final left = detection.left.clamp(0.0, 1.0).toDouble();
+    final top = detection.top.clamp(0.0, 1.0).toDouble();
+    final right = detection.right.clamp(0.0, 1.0).toDouble();
+    final bottom = detection.bottom.clamp(0.0, 1.0).toDouble();
+
+    final centerX = (left + right) / 2.0;
+    final centerY = (top + bottom) / 2.0;
+    final boxW = math.max(0.02, right - left);
+    final boxH = math.max(0.02, bottom - top);
+
+    var cropW = math.min(1.0, boxW * (1.0 + padding * 2.0));
+    var cropH = math.min(1.0, boxH * (1.0 + padding * 2.0));
+
+    // Минимальный контекст нужен для маленьких дат: иначе crop получится слишком тонким.
+    cropW = math.max(cropW, 0.05);
+    cropH = math.max(cropH, 0.025);
+    cropW = math.min(cropW, 1.0);
+    cropH = math.min(cropH, 1.0);
+
+    final cropLeft = (centerX - cropW / 2.0).clamp(0.0, 1.0 - cropW).toDouble();
+    final cropTop = (centerY - cropH / 2.0).clamp(0.0, 1.0 - cropH).toDouble();
+
+    final x = (cropLeft * imageWidth).floor().clamp(0, imageWidth - 1).toInt();
+    final y = (cropTop * imageHeight).floor().clamp(0, imageHeight - 1).toInt();
+    final w = math.max(1, (cropW * imageWidth).round()).clamp(1, imageWidth - x).toInt();
+    final h = math.max(1, (cropH * imageHeight).round()).clamp(1, imageHeight - y).toInt();
+
+    return Rect.fromLTWH(x.toDouble(), y.toDouble(), w.toDouble(), h.toDouble());
+  }
+
+  Future<void> _closeMagnifier({bool resumeCamera = true}) async {
+    _magnifierEpoch++;
+    final imageFile = _magnifierImageFile;
+
+    if (mounted) {
+      setState(() {
+        _magnifierBusy = false;
+        _magnifierImageFile = null;
+        _magnifierSourceDetection = null;
+        _magnifierRecognizedDate = null;
+        _magnifierRecognizedDateText = null;
+        _magnifierStatus = '';
+      });
+    } else {
+      _magnifierBusy = false;
+      _magnifierImageFile = null;
+      _magnifierSourceDetection = null;
+      _magnifierRecognizedDate = null;
+      _magnifierRecognizedDateText = null;
+      _magnifierStatus = '';    }
+
+    try {
+      if (imageFile != null && await imageFile.exists()) {
+        await imageFile.delete();
+      }
+    } catch (_) {}
+
+    if (resumeCamera && mounted && !_coveredByChildRoute) {
+      await _resumeScanning(recreateCamera: true);
+    }
+  }
+
+  Future<void> _closeMagnifierForNavigation() async {
+    if (!_magnifierActive) return;
+    await _closeMagnifier(resumeCamera: false);
+  }
+
+
+  String _formatDateRu(DateTime date) {
+    final d = date.day.toString().padLeft(2, '0');
+    final m = date.month.toString().padLeft(2, '0');
+    return '$d.$m.${date.year}';
+  }
+
+  void _showSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _openManualAdd({DateTime? initialExpiry, bool keepMagnifier = false}) async {
+    if (_manualAddSheetOpen) return;
+    if (!widget.auth.isAuthed) {
+      if (keepMagnifier) {
+        _showSnackBar('Для добавления продукта нужно авторизоваться');
+        return;
+      }
+      _goLogin(after: 'manual');
+      return;
+    }
+
+    _manualAddSheetOpen = true;
+    try {
+      if (!keepMagnifier) {
+        await _closeMagnifierForNavigation();
+        final added = await _showModalWithScanPaused<bool>(
+          () => showModalBottomSheet<bool>(
+            context: context,
+            isScrollControlled: true,
+            builder: (_) => ManualAddSheet(
+              auth: widget.auth,
+              initialExpiry: initialExpiry,
+            ),
+          ),
+        );
+        if (added == true && mounted) {
+          _showSnackBar('Продукт добавлен в личный кабинет');
+        }
+        return;
+      }
+
+      final added = await showModalBottomSheet<bool>(
+        context: context,
+        isScrollControlled: true,
+        builder: (_) => ManualAddSheet(
+          auth: widget.auth,
+          initialExpiry: initialExpiry,
+        ),
+      );
+      if (added == true && mounted) {
+        _showSnackBar('Продукт добавлен в личный кабинет');
+      }
+    } finally {
+      _manualAddSheetOpen = false;
+    }
+  }
+
+  Widget _buildMagnifierOverlay() {
+    final imageFile = _magnifierImageFile;
+    final busy = _magnifierBusy;
+
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black.withOpacity(0.96),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 84, 16, 88),
+            child: Column(
+              children: [
+                Expanded(
+                  child: Center(
+                    child: busy || imageFile == null
+                        ? Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const CircularProgressIndicator(),
+                              const SizedBox(height: 18),
+                              Text(
+                                _magnifierStatus.isEmpty ? 'Готовлю лупу...' : _magnifierStatus,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(color: Colors.white, fontSize: 16),
+                              ),
+                            ],
+                          )
+                        : InteractiveViewer(
+                            minScale: 1,
+                            maxScale: 6,
+                            child: Image.file(
+                              imageFile,
+                              fit: BoxFit.contain,
+                              filterQuality: FilterQuality.high,
+                            ),
+                          ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  _magnifierStatus,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70),
+                ),
+                if (!busy && _magnifierRecognizedDate != null) ...[
+                  const SizedBox(height: 10),
+                  FilledButton.icon(
+                    onPressed: () => unawaited(
+                      _openManualAdd(
+                        initialExpiry: _magnifierRecognizedDate,
+                        keepMagnifier: true,
+                      ),
+                    ),
+                    icon: const Icon(Icons.add_shopping_cart),
+                    label: Text('Добавить продукт с датой ${_formatDateRu(_magnifierRecognizedDate!)}'),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: busy ? null : () => unawaited(_closeMagnifier()),
+                  icon: const Icon(Icons.camera_alt),
+                  label: const Text('Назад к сканированию'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
-    unawaited(_controller?.dispose());
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(_disposeCameraController(updateState: false));
     _detector.close();
+    _dateOcr.close();
     super.dispose();
   }
 
   void _goLogin({required String after}) async {
-    await Navigator.push(
-      context,
+    await _closeMagnifierForNavigation();
+    await _pushWithScanPaused(
       MaterialPageRoute(builder: (_) => LoginScreen(auth: widget.auth, after: after)),
     );
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   void _openSettings() async {
-    await Navigator.push(
-      context,
+    await _closeMagnifierForNavigation();
+    await _pushWithScanPaused(
       MaterialPageRoute(builder: (_) => const SettingsScreen()),
     );
-    await _refreshAiState();
   }
 
   void _onProfile() async {
     if (!widget.auth.isAuthed) return _goLogin(after: 'profile');
-    await Navigator.push(
-      context,
+    await _closeMagnifierForNavigation();
+    await _pushWithScanPaused(
       MaterialPageRoute(builder: (_) => CabinetScreen(auth: widget.auth)),
     );
-    await _refreshAiState();
   }
 
   void _onManualAdd() async {
-    if (!widget.auth.isAuthed) return _goLogin(after: 'manual');
-    final added = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => ManualAddSheet(auth: widget.auth),
+    await _openManualAdd(
+      initialExpiry: _magnifierActive ? _magnifierRecognizedDate : null,
+      keepMagnifier: _magnifierActive,
     );
-    if (added == true && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Продукт добавлен в личный кабинет')),
-      );
-    }
   }
 
-  void _onError() {
+  void _onError() async {
     if (!widget.auth.isAuthed) return _goLogin(after: 'error');
-    Navigator.push(
-      context,
+    await _closeMagnifierForNavigation();
+    await _pushWithScanPaused(
       MaterialPageRoute(
         builder: (_) => ErrorDatasetFlowScreen(auth: widget.auth, cameras: widget.cameras),
       ),
+      releaseCamera: true,
     );
   }
 
@@ -349,12 +1048,22 @@ class _ScanScreenState extends State<ScanScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Stack(
+    return PopScope(
+      canPop: !_magnifierActive,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        if (_magnifierActive) {
+          await _closeMagnifier();
+        }
+      },
+      child: Scaffold(
+        body: Stack(
         children: [
           Positioned.fill(
-            child: _controller == null
-                ? Container(
+            child: (() {
+              final controller = _controller;
+              if (controller == null) {
+                return Container(
                     color: Colors.black,
                     alignment: Alignment.center,
                     padding: const EdgeInsets.all(24),
@@ -363,8 +1072,11 @@ class _ScanScreenState extends State<ScanScreen> {
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: Colors.white, fontSize: 16),
                     ),
-                  )
-                : FutureBuilder(
+                  );
+              }
+
+              return FutureBuilder<void>(
+                    key: ValueKey('camera-future-$_previewKeySeed'),
                     future: _initFuture,
                     builder: (context, snap) {
                       if (snap.hasError) {
@@ -381,12 +1093,18 @@ class _ScanScreenState extends State<ScanScreen> {
                       }
 
                       if (snap.connectionState != ConnectionState.done) {
-                        return const Center(child: CircularProgressIndicator());
+                        return const ColoredBox(
+                          color: Colors.black,
+                          child: Center(child: CircularProgressIndicator()),
+                        );
                       }
 
-                      final previewSize = _controller!.value.previewSize;
+                      final previewSize = controller.value.previewSize;
                       if (previewSize == null) {
-                        return const Center(child: CircularProgressIndicator());
+                        return const ColoredBox(
+                          color: Colors.black,
+                          child: Center(child: CircularProgressIndicator()),
+                        );
                       }
 
                       final childSize = Size(previewSize.height, previewSize.width);
@@ -399,23 +1117,44 @@ class _ScanScreenState extends State<ScanScreen> {
                             child: SizedBox(
                               width: childSize.width,
                               height: childSize.height,
-                              child: CameraPreview(_controller!),
+                              child: CameraPreview(
+                                controller,
+                                key: ValueKey('camera-preview-$_previewKeySeed'),
+                              ),
                             ),
                           ),
-                          IgnorePointer(
-                            child: CustomPaint(
-                              painter: _DetectionOverlayPainter(
-                                detections: _detections,
-                                previewContentSize: childSize,
-                              ),
-                              size: Size.infinite,
-                            ),
+                          LayoutBuilder(
+                            builder: (context, constraints) {
+                              final viewportSize = Size(constraints.maxWidth, constraints.maxHeight);
+                              return GestureDetector(
+                                behavior: HitTestBehavior.translucent,
+                                onTapUp: (details) {
+                                  final detection = _hitTestDetection(
+                                    details.localPosition,
+                                    viewportSize,
+                                    childSize,
+                                  );
+                                  if (detection != null) {
+                                    unawaited(_onDetectionTap(detection));
+                                  }
+                                },
+                                child: CustomPaint(
+                                  painter: _DetectionOverlayPainter(
+                                    detections: _detections,
+                                    previewContentSize: childSize,
+                                  ),
+                                  size: Size.infinite,
+                                ),
+                              );
+                            },
                           ),
                         ],
                       );
                     },
-                  ),
+                  );
+            })(),
           ),
+          if (_magnifierActive) _buildMagnifierOverlay(),
           SafeArea(
             child: Align(
               alignment: Alignment.topRight,
@@ -446,12 +1185,13 @@ class _ScanScreenState extends State<ScanScreen> {
               ),
             ),
           ),
-          SafeArea(
-            child: Align(
-              alignment: Alignment.topLeft,
-              child: _buildAiPanel(),
+          if (!_magnifierActive)
+            SafeArea(
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: _buildAiPanel(),
+              ),
             ),
-          ),
           SafeArea(
             child: Align(
               alignment: Alignment.bottomLeft,
@@ -479,7 +1219,8 @@ class _ScanScreenState extends State<ScanScreen> {
               ),
             ),
           ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -36,6 +36,7 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
   bool _uploading = false;
   bool _stopping = false;
   bool _recordingCompleted = false;
+  bool _leaving = false;
 
   Future<void>? _captureLoopFuture;
   int _captureIndex = 0;
@@ -49,8 +50,8 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
   List<File> _frames = [];
   int _index = 0;
 
-  // bbox per frame in real image pixel coords.
-  final Map<int, Rect> _bboxes = {};
+  // bboxes per frame in real image pixel coords. One frame can contain several date areas.
+  final Map<int, List<Rect>> _bboxes = {};
   final Set<int> _skipped = {};
   final Map<int, Size> _frameSizes = {};
 
@@ -70,11 +71,66 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
     _initFuture = _controller!.initialize();
   }
 
+  Future<void> _releaseCamera() async {
+    _isRecording = false;
+    final controller = _controller;
+    _controller = null;
+    _initFuture = null;
+
+    if (controller == null) return;
+
+    try {
+      if (controller.value.isInitialized && controller.value.isStreamingImages) {
+        await controller.stopImageStream();
+      }
+    } catch (_) {
+      // Ignore camera stream races during route disposal.
+    }
+
+    try {
+      await controller.dispose();
+    } catch (_) {
+      // Ignore double-dispose/native disposal races.
+    }
+  }
+
+  Future<bool> _prepareToLeave() async {
+    if (_uploading || _stopping) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Дождись завершения текущей операции')),
+        );
+      }
+      return false;
+    }
+
+    if (_leaving) return false;
+    _leaving = true;
+    _limitTimer?.cancel();
+    _isRecording = false;
+
+    if (mounted) {
+      setState(() => _status = 'Освобождаю камеру...');
+    }
+
+    final loop = _captureLoopFuture;
+    if (loop != null) {
+      try {
+        await loop.timeout(const Duration(seconds: 5), onTimeout: () {});
+      } catch (_) {
+        // The loop can fail if native camera is already being disposed.
+      }
+    }
+
+    await _releaseCamera();
+    return true;
+  }
+
   @override
   void dispose() {
     _limitTimer?.cancel();
     _isRecording = false;
-    _controller?.dispose();
+    unawaited(_releaseCamera());
     _comment.dispose();
     super.dispose();
   }
@@ -221,6 +277,8 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
         sizes[i] = await _readImageSize(_frames[i]);
       }
 
+      await _releaseCamera();
+
       if (!mounted) return;
       setState(() {
         _frameSizes
@@ -248,7 +306,11 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
 
   bool get _allAnnotated =>
       _frames.isNotEmpty &&
-      List<int>.generate(_frames.length, (i) => i).every((i) => _skipped.contains(i) || _bboxes.containsKey(i));
+      List<int>.generate(_frames.length, (i) => i).every((i) {
+        if (_skipped.contains(i)) return true;
+        final boxes = _bboxes[i];
+        return boxes != null && boxes.isNotEmpty;
+      });
 
   int get _usableFramesCount => _frames.length - _skipped.length;
 
@@ -274,7 +336,7 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
     return size;
   }
 
-  Future<void> _writeYoloLabel(int index, Rect r) async {
+  Future<void> _writeYoloLabel(int index, List<Rect> rects) async {
     final labels = _labelsDir!;
     final name = _frameName(index).replaceAll('.jpg', '.txt');
     final path = '${labels.path}/$name';
@@ -286,32 +348,42 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
     double clampX(double v) => v < 0 ? 0 : (v > width ? width : v);
     double clampY(double v) => v < 0 ? 0 : (v > height ? height : v);
 
-    final left = clampX(r.left);
-    final top = clampY(r.top);
-    final right = clampX(r.right);
-    final bottom = clampY(r.bottom);
+    final lines = <String>[];
+    for (final r in rects) {
+      final left = clampX(r.left);
+      final top = clampY(r.top);
+      final right = clampX(r.right);
+      final bottom = clampY(r.bottom);
 
-    final w = math.max(1.0, right - left);
-    final h = math.max(1.0, bottom - top);
-    final cx = left + w / 2.0;
-    final cy = top + h / 2.0;
+      final w = right - left;
+      final h = bottom - top;
+      if (w < 2 || h < 2) continue;
 
-    final xc = cx / width;
-    final yc = cy / height;
-    final wn = w / width;
-    final hn = h / height;
+      final cx = left + w / 2.0;
+      final cy = top + h / 2.0;
 
-    final line =
-        '0 ${xc.toStringAsFixed(6)} ${yc.toStringAsFixed(6)} ${wn.toStringAsFixed(6)} ${hn.toStringAsFixed(6)}\n';
-    await File(path).writeAsString(line, flush: true);
+      final xc = cx / width;
+      final yc = cy / height;
+      final wn = w / width;
+      final hn = h / height;
+
+      lines.add('0 ${xc.toStringAsFixed(6)} ${yc.toStringAsFixed(6)} ${wn.toStringAsFixed(6)} ${hn.toStringAsFixed(6)}');
+    }
+
+    if (lines.isEmpty) {
+      throw Exception('На кадре нет валидных областей разметки.');
+    }
+
+    final content = lines.join('\n') + '\n';
+    await File(path).writeAsString(content, flush: true);
   }
 
   Future<void> _saveCurrentAndNext() async {
-    final r = _bboxes[_index];
-    if (r == null) return;
+    final boxes = _bboxes[_index];
+    if (boxes == null || boxes.isEmpty) return;
 
     _skipped.remove(_index);
-    await _writeYoloLabel(_index, r);
+    await _writeYoloLabel(_index, boxes);
 
     if (_index < _frames.length - 1) {
       setState(() => _index++);
@@ -358,14 +430,12 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
     for (var i = 0; i < _frames.length; i++) {
       if (_skipped.contains(i)) continue;
 
-      if (!_bboxes.containsKey(i)) {
+      final boxes = _bboxes[i];
+      if (boxes == null || boxes.isEmpty) {
         throw Exception('Не все кадры размечены или пропущены.');
       }
 
-      final txt = File('${_labelsDir!.path}/${_frameName(i).replaceAll('.jpg', '.txt')}');
-      if (!await txt.exists()) {
-        await _writeYoloLabel(i, _bboxes[i]!);
-      }
+      await _writeYoloLabel(i, boxes);
     }
 
     final imageFiles = <File>[];
@@ -428,9 +498,10 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
       final api = ApiClient(token: widget.auth.token);
       await api.uploadDatasetZip(zipPath, comment: _comment.text.trim());
 
+      await _releaseCamera();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Отправлено ✅')));
-      Navigator.pop(context);
+      Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
@@ -440,10 +511,14 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
     }
   }
 
-  void _setBBoxForCurrent(Rect rect) {
+  void _setBBoxesForCurrent(List<Rect> rects) {
     setState(() {
-      _skipped.remove(_index);
-      _bboxes[_index] = rect;
+      if (rects.isEmpty) {
+        _bboxes.remove(_index);
+      } else {
+        _skipped.remove(_index);
+        _bboxes[_index] = List<Rect>.unmodifiable(rects);
+      }
     });
   }
 
@@ -452,22 +527,39 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
     final readyToAnnotate = _recordingCompleted && _frames.isNotEmpty;
     final currentFile = readyToAnnotate ? _frames[_index] : null;
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Сообщить об ошибке')),
-      body: FutureBuilder(
-        future: _initFuture,
-        builder: (context, snap) {
-          if (snap.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
-          }
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final ok = await _prepareToLeave();
+        if (ok && context.mounted) {
+          Navigator.of(context).pop(result);
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(title: const Text('Сообщить об ошибке')),
+        body: FutureBuilder(
+          future: _initFuture,
+          builder: (context, snap) {
+            final controller = _controller;
+            if (!readyToAnnotate && (controller == null || _initFuture == null)) {
+              return Center(child: Text(_status ?? 'Камера освобождается...'));
+            }
 
-          return ListView(
+            if (!readyToAnnotate && snap.connectionState != ConnectionState.done) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            return ListView(
             padding: const EdgeInsets.all(16),
             children: [
               if (!readyToAnnotate) ...[
                 AspectRatio(
-                  aspectRatio: _controller!.value.aspectRatio,
-                  child: CameraPreview(_controller!),
+                  aspectRatio: controller!.value.aspectRatio,
+                  child: CameraPreview(
+                    controller,
+                    key: ValueKey('report-camera-${controller.hashCode}'),
+                  ),
                 ),
                 const SizedBox(height: 12),
                 Row(
@@ -499,8 +591,8 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
                 const SizedBox(height: 12),
                 _Annotator(
                   imageFile: currentFile!,
-                  initial: _bboxes[_index],
-                  onChanged: _setBBoxForCurrent,
+                  initial: _bboxes[_index] ?? const [],
+                  onChanged: _setBBoxesForCurrent,
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -535,7 +627,7 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: _bboxes[_index] == null ? null : _saveCurrentAndNext,
+                    onPressed: (_bboxes[_index]?.isNotEmpty ?? false) ? _saveCurrentAndNext : null,
                     child: Text(_index == _frames.length - 1 ? 'Завершить' : 'Сохранить и далее'),
                   ),
                 ),
@@ -546,12 +638,13 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
                   label: Text(_uploading ? 'Отправка...' : 'Отправить'),
                 ),
                 const SizedBox(height: 8),
-                Text('Размечено: ${_bboxes.length}, пропущено: ${_skipped.length}, всего: ${_frames.length}'),
+                Text('Размечено кадров: ${_bboxes.length}, областей: ${_bboxes.values.fold<int>(0, (sum, boxes) => sum + boxes.length)}, пропущено: ${_skipped.length}, всего: ${_frames.length}'),
                 if (_status != null) Text(_status!),
               ],
             ],
           );
         },
+        ),
       ),
     );
   }
@@ -559,8 +652,8 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
 
 class _Annotator extends StatefulWidget {
   final File imageFile;
-  final Rect? initial;
-  final ValueChanged<Rect> onChanged;
+  final List<Rect> initial;
+  final ValueChanged<List<Rect>> onChanged;
 
   const _Annotator({required this.imageFile, required this.initial, required this.onChanged});
 
@@ -570,13 +663,14 @@ class _Annotator extends StatefulWidget {
 
 class _AnnotatorState extends State<_Annotator> {
   Offset? _start;
-  Rect? _rect;
+  Rect? _draftRect;
+  late List<Rect> _rects;
   late Future<Size> _imageSizeFuture;
 
   @override
   void initState() {
     super.initState();
-    _rect = widget.initial;
+    _rects = List<Rect>.from(widget.initial);
     _imageSizeFuture = _readImageSize(widget.imageFile);
   }
 
@@ -584,12 +678,22 @@ class _AnnotatorState extends State<_Annotator> {
   void didUpdateWidget(covariant _Annotator oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.imageFile.path != widget.imageFile.path) {
-      _rect = widget.initial;
+      _rects = List<Rect>.from(widget.initial);
+      _draftRect = null;
       _start = null;
       _imageSizeFuture = _readImageSize(widget.imageFile);
-    } else if (oldWidget.initial != widget.initial) {
-      _rect = widget.initial;
+    } else if (!_sameRects(oldWidget.initial, widget.initial)) {
+      _rects = List<Rect>.from(widget.initial);
+      _draftRect = null;
     }
+  }
+
+  bool _sameRects(List<Rect> a, List<Rect> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   Future<Size> _readImageSize(File file) async {
@@ -607,6 +711,23 @@ class _AnnotatorState extends State<_Annotator> {
     final right = math.max(a.dx, b.dx);
     final bottom = math.max(a.dy, b.dy);
     return Rect.fromLTRB(left, top, right, bottom);
+  }
+
+  void _publish() => widget.onChanged(List<Rect>.unmodifiable(_rects));
+
+  void _clearAll() {
+    setState(() {
+      _rects.clear();
+      _draftRect = null;
+      _start = null;
+    });
+    _publish();
+  }
+
+  void _undoLast() {
+    if (_rects.isEmpty) return;
+    setState(() => _rects.removeLast());
+    _publish();
   }
 
   @override
@@ -641,52 +762,92 @@ class _AnnotatorState extends State<_Annotator> {
               return Offset(clamped.dx * scaleX, clamped.dy * scaleY);
             }
 
-            Rect? rectLocal = _rect == null
-                ? null
-                : Rect.fromLTRB(
-                    _rect!.left / scaleX,
-                    _rect!.top / scaleY,
-                    _rect!.right / scaleX,
-                    _rect!.bottom / scaleY,
-                  );
+            Rect toLocalRect(Rect r) => Rect.fromLTRB(
+                  r.left / scaleX,
+                  r.top / scaleY,
+                  r.right / scaleX,
+                  r.bottom / scaleY,
+                );
+
+            final localRects = _rects.map(toLocalRect).toList(growable: false);
+            final localDraft = _draftRect == null ? null : toLocalRect(_draftRect!);
 
             return Center(
-              child: GestureDetector(
-                onPanStart: (d) {
-                  _start = toImage(d.localPosition);
-                  setState(() => _rect = Rect.fromLTWH(_start!.dx, _start!.dy, 1, 1));
-                },
-                onPanUpdate: (d) {
-                  if (_start == null) return;
-                  final cur = toImage(d.localPosition);
-                  setState(() => _rect = _rectFrom(_start!, cur));
-                },
-                onPanEnd: (_) {
-                  if (_rect != null) widget.onChanged(_rect!);
-                  _start = null;
-                },
-                child: SizedBox(
-                  width: displayWidth,
-                  height: displayHeight,
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
+              child: SizedBox(
+                width: displayWidth,
+                height: displayHeight,
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: GestureDetector(
+                        onPanStart: (d) {
+                          _start = toImage(d.localPosition);
+                          setState(() => _draftRect = Rect.fromLTWH(_start!.dx, _start!.dy, 1, 1));
+                        },
+                        onPanUpdate: (d) {
+                          if (_start == null) return;
+                          final cur = toImage(d.localPosition);
+                          setState(() => _draftRect = _rectFrom(_start!, cur));
+                        },
+                        onPanEnd: (_) {
+                          final draft = _draftRect;
+                          if (draft != null && draft.width >= 4 && draft.height >= 4) {
+                            setState(() {
+                              _rects.add(draft);
+                              _draftRect = null;
+                            });
+                            _publish();
+                          } else {
+                            setState(() => _draftRect = null);
+                          }
+                          _start = null;
+                        },
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(12),
                           child: Image.file(widget.imageFile, fit: BoxFit.fill),
                         ),
                       ),
-                      Positioned.fill(child: CustomPaint(painter: _RectPainter(rectLocal))),
-                      Positioned(
-                        right: 8,
-                        top: 8,
-                        child: FilledButton.tonal(
-                          onPressed: () => setState(() => _rect = null),
-                          child: const Text('Сброс'),
+                    ),
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: CustomPaint(painter: _RectPainter(rects: localRects, draft: localDraft)),
+                      ),
+                    ),
+                    Positioned(
+                      left: 8,
+                      top: 8,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.55),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                          child: Text(
+                            'Областей: ${_rects.length}',
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                          ),
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                    Positioned(
+                      right: 8,
+                      top: 8,
+                      child: Wrap(
+                        spacing: 6,
+                        children: [
+                          FilledButton.tonal(
+                            onPressed: _rects.isEmpty ? null : _undoLast,
+                            child: const Text('Назад'),
+                          ),
+                          FilledButton.tonal(
+                            onPressed: _rects.isEmpty && _draftRect == null ? null : _clearAll,
+                            child: const Text('Сброс'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
             );
@@ -698,18 +859,41 @@ class _AnnotatorState extends State<_Annotator> {
 }
 
 class _RectPainter extends CustomPainter {
-  final Rect? rect;
-  _RectPainter(this.rect);
+  final List<Rect> rects;
+  final Rect? draft;
+
+  _RectPainter({required this.rects, required this.draft});
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (rect == null) return;
     final paint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3;
-    canvas.drawRect(rect!, paint);
+      ..strokeWidth = 3
+      ..color = const Color(0xFF1565C0);
+
+    for (final rect in rects) {
+      canvas.drawRect(rect, paint);
+    }
+
+    final draftRect = draft;
+    if (draftRect != null) {
+      final draftPaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..color = const Color(0xFF00C853);
+      canvas.drawRect(draftRect, draftPaint);
+    }
   }
 
   @override
-  bool shouldRepaint(covariant _RectPainter oldDelegate) => oldDelegate.rect != rect;
+  bool shouldRepaint(covariant _RectPainter oldDelegate) =>
+      oldDelegate.draft != draft || !_sameRects(oldDelegate.rects, rects);
+
+  bool _sameRects(List<Rect> a, List<Rect> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
 }

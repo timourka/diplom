@@ -5,7 +5,13 @@ import '../auth/auth_state.dart';
 
 class ManualAddSheet extends StatefulWidget {
   final AuthState auth;
-  const ManualAddSheet({super.key, required this.auth});
+  final DateTime? initialExpiry;
+
+  const ManualAddSheet({
+    super.key,
+    required this.auth,
+    this.initialExpiry,
+  });
 
   @override
   State<ManualAddSheet> createState() => _ManualAddSheetState();
@@ -17,6 +23,12 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
 
   String? _error;
   bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _expiry = widget.initialExpiry;
+  }
 
   @override
   void dispose() {

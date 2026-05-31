@@ -174,6 +174,49 @@ class TfliteDateDetector {
     }
   }
 
+
+  Future<DetectionFrameResult> detectFromImageFile(
+    String imagePath, {
+    DetectionResult? focusRegion,
+    double focusPadding = 1.6,
+    double confidenceThreshold = 0.50,
+    int maxDetections = 3,
+    bool strictGeometryFilters = true,
+  }) async {
+    final workerSendPort = _workerSendPort;
+    if (workerSendPort == null) {
+      return const DetectionFrameResult(detections: [], perf: FramePerf());
+    }
+
+    final requestId = _nextRequestId++;
+    final completer = Completer<DetectionFrameResult>();
+    _pendingRequests[requestId] = completer;
+
+    workerSendPort.send({
+      'type': 'detectFile',
+      'requestId': requestId,
+      'imagePath': imagePath,
+      'focusPadding': focusPadding,
+      'confidenceThreshold': confidenceThreshold,
+      'maxDetections': maxDetections,
+      'strictGeometryFilters': strictGeometryFilters,
+      if (focusRegion != null)
+        'focus': {
+          'left': focusRegion.left,
+          'top': focusRegion.top,
+          'right': focusRegion.right,
+          'bottom': focusRegion.bottom,
+        },
+      'submittedAtMicros': DateTime.now().microsecondsSinceEpoch,
+    });
+
+    try {
+      return await completer.future.timeout(const Duration(seconds: 20));
+    } finally {
+      _pendingRequests.remove(requestId);
+    }
+  }
+
   void close() {
     for (final completer in _pendingRequests.values) {
       if (!completer.isCompleted) {
@@ -353,8 +396,24 @@ void _detectorWorkerEntry(SendPort mainSendPort) async {
 
         final postSw = Stopwatch()..start();
         detections = _isQuantizedTensor(outputType)
-            ? _parseOutputInt(output, prep, inputSize, outputScale, outputZeroPoint)
-            : _parseOutputFloat(output, prep, inputSize);
+            ? _parseOutputInt(
+                output,
+                prep,
+                inputSize,
+                outputScale,
+                outputZeroPoint,
+                confidenceThreshold: 0.50,
+                maxDetections: 3,
+                strictGeometryFilters: true,
+              )
+            : _parseOutputFloat(
+                output,
+                prep,
+                inputSize,
+                confidenceThreshold: 0.50,
+                maxDetections: 3,
+                strictGeometryFilters: true,
+              );
         postSw.stop();
         perf['postprocessMs'] = postSw.elapsedMilliseconds;
 
@@ -377,8 +436,122 @@ void _detectorWorkerEntry(SendPort mainSendPort) async {
         });
       }
     }
+
+    if (type == 'detectFile') {
+      final requestId = message['requestId'] as int?;
+      if (requestId == null) continue;
+
+      try {
+        final activeInterpreter = interpreter;
+        if (activeInterpreter == null) {
+          throw StateError('Interpreter ещё не инициализирован.');
+        }
+
+        final imagePath = message['imagePath']?.toString();
+        if (imagePath == null || imagePath.isEmpty) {
+          throw StateError('Путь к изображению для уточнения не передан.');
+        }
+
+        final submittedAtMicros = message['submittedAtMicros'] as int?;
+        final totalSw = Stopwatch()..start();
+        final perf = <String, int>{
+          'queueWaitMs': submittedAtMicros == null
+              ? 0
+              : ((DateTime.now().microsecondsSinceEpoch - submittedAtMicros) / 1000).round(),
+        };
+
+        final decodeSw = Stopwatch()..start();
+        final decoded = img.decodeImage(File(imagePath).readAsBytesSync());
+        if (decoded == null) {
+          throw StateError('Не удалось прочитать снимок высокого разрешения.');
+        }
+        final oriented = img.bakeOrientation(decoded);
+        decodeSw.stop();
+        perf['yuvToRgbMs'] = decodeSw.elapsedMilliseconds;
+        perf['rotateMs'] = 0;
+
+        final cropInfo = _cropImageByFocus(
+          oriented,
+          (message['focus'] as Map?)?.cast<String, Object?>(),
+          (message['focusPadding'] as num?)?.toDouble() ?? 1.6,
+        );
+
+        final resizeSw = Stopwatch()..start();
+        final prep = _letterbox(cropInfo.image, inputSize);
+        resizeSw.stop();
+        perf['resizeLetterboxMs'] = resizeSw.elapsedMilliseconds;
+        final outputShape = activeInterpreter.getOutputTensor(0).shape;
+
+        final tensorSw = Stopwatch()..start();
+        final inputData = _isQuantizedTensor(inputType)
+            ? _buildQuantizedInput(prep.image, inputSize, inputScale, inputZeroPoint, inputType)
+            : _buildFloatInput(prep.image, inputSize);
+        tensorSw.stop();
+        perf['tensorBuildMs'] = tensorSw.elapsedMilliseconds;
+
+        final output = _isQuantizedTensor(outputType)
+            ? _createOutputContainerInt(outputShape, outputZeroPoint)
+            : _createOutputContainerFloat(outputShape);
+
+        final inferSw = Stopwatch()..start();
+        activeInterpreter.run(inputData, output);
+        inferSw.stop();
+        perf['inferMs'] = inferSw.elapsedMilliseconds;
+
+        final postSw = Stopwatch()..start();
+        final confidenceThreshold = (message['confidenceThreshold'] as num?)?.toDouble() ?? 0.50;
+        final maxDetections = (message['maxDetections'] as int?) ?? 3;
+        final strictGeometryFilters = message['strictGeometryFilters'] != false;
+
+        final cropDetections = _isQuantizedTensor(outputType)
+            ? _parseOutputInt(
+                output,
+                prep,
+                inputSize,
+                outputScale,
+                outputZeroPoint,
+                confidenceThreshold: confidenceThreshold,
+                maxDetections: maxDetections,
+                strictGeometryFilters: strictGeometryFilters,
+              )
+            : _parseOutputFloat(
+                output,
+                prep,
+                inputSize,
+                confidenceThreshold: confidenceThreshold,
+                maxDetections: maxDetections,
+                strictGeometryFilters: strictGeometryFilters,
+              );
+        final detections = _mapCropDetectionsToFullImage(
+          cropDetections,
+          cropInfo,
+          oriented.width,
+          oriented.height,
+        );
+        postSw.stop();
+        perf['postprocessMs'] = postSw.elapsedMilliseconds;
+
+        totalSw.stop();
+        perf['totalMs'] = totalSw.elapsedMilliseconds;
+
+        mainSendPort.send({
+          'type': 'result',
+          'requestId': requestId,
+          'ok': true,
+          'detections': detections,
+          'perf': perf,
+        });
+      } catch (e, st) {
+        mainSendPort.send({
+          'type': 'result',
+          'requestId': requestId,
+          'ok': false,
+          'error': '$e\n$st',
+        });
+      }
+    }
+    }
   }
-}
 
 class _WorkerCameraImage {
   final int width;
@@ -619,12 +792,14 @@ dynamic _createOutputContainerInt(List<int> shape, int zeroPoint) {
   throw UnsupportedError('Unsupported int output shape: $shape');
 }
 
-List<Map<String, Object>> _parseOutputFloat(dynamic output, _LetterboxResult prep, int inputSize) {
-  // На ПК ты запускал predict с conf=0.5 и получил нормальные 0.62/0.52.
-  // Поэтому в мобильном приложении нельзя держать 0.05: это пропускает мусорные кандидаты.
-  const confidenceThreshold = 0.50;
-  const maxDetections = 3;
-
+List<Map<String, Object>> _parseOutputFloat(
+  dynamic output,
+  _LetterboxResult prep,
+  int inputSize, {
+  required double confidenceThreshold,
+  required int maxDetections,
+  required bool strictGeometryFilters,
+}) {
   final rows = _extractFloatRows(output);
   final results = <Map<String, Object>>[];
 
@@ -668,9 +843,14 @@ List<Map<String, Object>> _parseOutputFloat(dynamic output, _LetterboxResult pre
     final area = boxWidth * boxHeight;
     final aspect = boxWidth / boxHeight;
 
-    // Дата — мелкая горизонтальная строка. Эти фильтры убирают большие/квадратные ложные рамки.
-    if (area < 0.00002 || area > 0.25) continue;
-    if (aspect < 1.2) continue;
+    // Для live-сканирования фильтры нужны, чтобы не рисовать мусор.
+    // Для режима лупы они могут быть отключены: там важнее найти даже слабый bbox около клика.
+    if (strictGeometryFilters) {
+      if (area < 0.00002 || area > 0.25) continue;
+      if (aspect < 1.2) continue;
+    } else {
+      if (area < 0.000005 || area > 0.75) continue;
+    }
 
     results.add({
       'confidence': confidence.clamp(0.0, 1.0),
@@ -685,7 +865,7 @@ List<Map<String, Object>> _parseOutputFloat(dynamic output, _LetterboxResult pre
   results.sort(
     (a, b) => ((b['confidence'] as num).toDouble()).compareTo((a['confidence'] as num).toDouble()),
   );
-  return results.take(maxDetections).toList(growable: false);
+  return results.take(math.max(1, maxDetections)).toList(growable: false);
 }
 
 List<Map<String, Object>> _parseOutputInt(
@@ -693,13 +873,23 @@ List<Map<String, Object>> _parseOutputInt(
   _LetterboxResult prep,
   int inputSize,
   double outputScale,
-  int outputZeroPoint,
-) {
+  int outputZeroPoint, {
+  required double confidenceThreshold,
+  required int maxDetections,
+  required bool strictGeometryFilters,
+}) {
   final rows = _extractIntRows(output);
   final dequantized = rows
       .map((row) => row.map((v) => (v - outputZeroPoint) * outputScale).toList(growable: false))
       .toList(growable: false);
-  return _parseOutputFloat([dequantized], prep, inputSize);
+  return _parseOutputFloat(
+    [dequantized],
+    prep,
+    inputSize,
+    confidenceThreshold: confidenceThreshold,
+    maxDetections: maxDetections,
+    strictGeometryFilters: strictGeometryFilters,
+  );
 }
 
 List<List<double>> _extractFloatRows(dynamic output) {
@@ -756,6 +946,92 @@ double _mapY(double rawValue, _LetterboxResult prep, int inputSize) {
 }
 
 int _clampColor(int value) => math.max(0, math.min(255, value));
+
+
+class _FocusCropResult {
+  final img.Image image;
+  final int x;
+  final int y;
+  final int width;
+  final int height;
+
+  const _FocusCropResult({
+    required this.image,
+    required this.x,
+    required this.y,
+    required this.width,
+    required this.height,
+  });
+}
+
+_FocusCropResult _cropImageByFocus(img.Image source, Map<String, Object?>? focus, double paddingFactor) {
+  if (focus == null) {
+    return _FocusCropResult(image: source, x: 0, y: 0, width: source.width, height: source.height);
+  }
+
+  final left = ((focus['left'] as num?)?.toDouble() ?? 0.0).clamp(0.0, 1.0).toDouble();
+  final top = ((focus['top'] as num?)?.toDouble() ?? 0.0).clamp(0.0, 1.0).toDouble();
+  final right = ((focus['right'] as num?)?.toDouble() ?? 1.0).clamp(0.0, 1.0).toDouble();
+  final bottom = ((focus['bottom'] as num?)?.toDouble() ?? 1.0).clamp(0.0, 1.0).toDouble();
+
+  if (right <= left || bottom <= top) {
+    return _FocusCropResult(image: source, x: 0, y: 0, width: source.width, height: source.height);
+  }
+
+  final centerX = (left + right) / 2.0;
+  final centerY = (top + bottom) / 2.0;
+  final boxW = math.max(0.03, right - left);
+  final boxH = math.max(0.03, bottom - top);
+  final factor = math.max(1.0, paddingFactor);
+
+  var cropWNorm = math.min(1.0, boxW * factor);
+  var cropHNorm = math.min(1.0, boxH * factor);
+
+  // Дата часто очень низкая по высоте; добавляем минимальный контекст вокруг строки,
+  // чтобы повторный инференс видел не только пиксели символов, но и часть упаковки.
+  cropWNorm = math.max(cropWNorm, 0.18);
+  cropHNorm = math.max(cropHNorm, 0.08);
+  cropWNorm = math.min(cropWNorm, 1.0);
+  cropHNorm = math.min(cropHNorm, 1.0);
+
+  final cropLeft = (centerX - cropWNorm / 2.0).clamp(0.0, 1.0 - cropWNorm).toDouble();
+  final cropTop = (centerY - cropHNorm / 2.0).clamp(0.0, 1.0 - cropHNorm).toDouble();
+
+  final x = (cropLeft * source.width).floor().clamp(0, source.width - 1).toInt();
+  final y = (cropTop * source.height).floor().clamp(0, source.height - 1).toInt();
+  final w = math.max(1, (cropWNorm * source.width).round()).clamp(1, source.width - x).toInt();
+  final h = math.max(1, (cropHNorm * source.height).round()).clamp(1, source.height - y).toInt();
+
+  final cropped = img.copyCrop(source, x: x, y: y, width: w, height: h);
+  return _FocusCropResult(image: cropped, x: x, y: y, width: w, height: h);
+}
+
+List<Map<String, Object>> _mapCropDetectionsToFullImage(
+  List<Map<String, Object>> cropDetections,
+  _FocusCropResult crop,
+  int fullWidth,
+  int fullHeight,
+) {
+  return cropDetections
+      .map((detection) {
+        final left = (crop.x + (detection['left'] as num).toDouble() * crop.width) / fullWidth;
+        final top = (crop.y + (detection['top'] as num).toDouble() * crop.height) / fullHeight;
+        final right = (crop.x + (detection['right'] as num).toDouble() * crop.width) / fullWidth;
+        final bottom = (crop.y + (detection['bottom'] as num).toDouble() * crop.height) / fullHeight;
+        return <String, Object>{
+          'confidence': detection['confidence'] as Object,
+          'classIndex': detection['classIndex'] as Object,
+          'left': left.clamp(0.0, 1.0).toDouble(),
+          'top': top.clamp(0.0, 1.0).toDouble(),
+          'right': right.clamp(0.0, 1.0).toDouble(),
+          'bottom': bottom.clamp(0.0, 1.0).toDouble(),
+        };
+      })
+      .where((detection) =>
+          (detection['right'] as double) > (detection['left'] as double) &&
+          (detection['bottom'] as double) > (detection['top'] as double))
+      .toList(growable: false);
+}
 
 class _LetterboxResult {
   final img.Image image;
