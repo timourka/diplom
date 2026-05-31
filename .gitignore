@@ -81,3 +81,8 @@ datasets
 Products-Real
 
 test_real
+
+.venv_tf
+date_reader_work
+date_reader_work_v5
+date_reader_work_v5_gpu
