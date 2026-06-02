@@ -1,0 +1,12 @@
+{
+  "alphabet": "0123456789./-",
+  "blank_index": 13,
+  "input_width": 256,
+  "input_height": 48,
+  "time_steps": 64,
+  "num_classes": 14,
+  "model_size": "large",
+  "decode": "CTC greedy: argmax per timestep, remove repeats, remove blank=len(alphabet)",
+  "val_exact_sample": 0.685,
+  "val_cer_sample": 0.04950758583976577
+}

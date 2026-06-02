@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/painting.dart';
 import 'package:image/image.dart' as img;
 
-import '../ai/date_ocr_service.dart';
+import '../ai/date_reader_tflite.dart';
 import '../ai/detection_result.dart';
 import '../ai/tflite_date_detector.dart';
 import '../api/model_sync_service.dart';
@@ -41,7 +41,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
 
   final _modelSync = ModelSyncService();
   late final TfliteDateDetector _detector;
-  late final DateOcrService _dateOcr;
+  late final DateReaderTflite _dateReader;
 
   bool _aiReady = false;
   bool _aiBusy = false;
@@ -72,7 +72,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _detector = TfliteDateDetector(modelSyncService: _modelSync);
-    _dateOcr = DateOcrService();
+    _dateReader = DateReaderTflite.instance;
     if (widget.startupError != null && widget.startupError!.isNotEmpty) {
       _aiStatus = widget.startupError!;
     }
@@ -502,13 +502,25 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
         // Temporary camera file cleanup is best-effort.
       }
 
-      DateOcrResult? ocrResult;
+      DateReaderResult? readerResult;
+      DateTime? recognizedDate;
+      String? recognizedText;
+      double readerConfidence = 0.0;
+
       try {
         if (cropFile != null) {
-          ocrResult = await _dateOcr.recognizeDateFromImagePath(cropFile.path);
+          readerResult = await _dateReader.recognizeFile(cropFile);
+          recognizedText = readerResult?.normalizedText;
+          readerConfidence = readerResult?.confidence ?? 0.0;
+          if (readerResult != null) {
+            recognizedDate = _parseDateReaderText(readerResult.normalizedText);
+          }
         }
-      } catch (_) {
-        ocrResult = null;
+      } catch (e) {
+        readerResult = null;
+        recognizedDate = null;
+        recognizedText = null;
+        readerConfidence = 0.0;
       }
 
       if (!mounted || magnifierEpoch != _magnifierEpoch) {
@@ -518,24 +530,29 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
         return;
       }
 
-      final recognizedDate = ocrResult?.date;
-      final recognizedText = ocrResult?.matchedText;
+      const autoFillThreshold = 0.55;
+      final canAutoFill = recognizedDate != null && readerConfidence >= autoFillThreshold;
       final baseStatus = hasRefinedDetection
-          ? 'Область уточнена на снимке высокого разрешения. Уверенность: '
+          ? 'Область уточнена на снимке высокого разрешения. Уверенность детектора: '
               '${((refinedDetection.confidence) * 100).toStringAsFixed(1)}%.'
           : 'Показан фрагмент по месту клика.';
+      final readerStatus = recognizedText == null || recognizedText!.isEmpty
+          ? 'Дата не распознана.'
+          : canAutoFill
+              ? 'Распознана дата: ${_formatDateRu(recognizedDate!)} '
+                  '(текст: $recognizedText, уверенность OCR: ${(readerConfidence * 100).toStringAsFixed(0)}%).'
+              : 'OCR предположил "$recognizedText", но уверенность низкая: '
+                  '${(readerConfidence * 100).toStringAsFixed(0)}%. Дата не будет подставлена автоматически.';
 
       setState(() {
         _magnifierBusy = false;
         _magnifierImageFile = cropFile;
-        _magnifierRecognizedDate = recognizedDate;
+        _magnifierRecognizedDate = canAutoFill ? recognizedDate : null;
         _magnifierRecognizedDateText = recognizedText;
-        _magnifierStatus = recognizedDate == null
-            ? '$baseStatus Дата не распознана.'
-            : '$baseStatus Распознана дата: ${_formatDateRu(recognizedDate)}.';
+        _magnifierStatus = '$baseStatus $readerStatus';
       });
 
-      if (recognizedDate != null) {
+      if (canAutoFill) {
         await Future<void>.delayed(const Duration(milliseconds: 150));
         if (mounted && magnifierEpoch == _magnifierEpoch && _magnifierImageFile != null) {
           unawaited(_openManualAdd(initialExpiry: recognizedDate, keepMagnifier: true));
@@ -776,6 +793,106 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   }
 
 
+  DateTime? _parseDateReaderText(String text) {
+    var s = text.trim();
+    if (s.isEmpty) return null;
+    s = s.replaceAll(' ', '.');
+    s = s.replaceAll('/', '.').replaceAll('-', '.');
+    s = s.replaceAll(RegExp(r'[^0-9.]'), '');
+    s = s.replaceAll(RegExp(r'[.]{2,}'), '.');
+    s = s.replaceAll(RegExp(r'^\.|\.$'), '');
+
+    final parts = s.split('.').where((p) => p.isNotEmpty).toList();
+    if (parts.length == 3) {
+      final a = int.tryParse(parts[0]);
+      final b = int.tryParse(parts[1]);
+      final c = int.tryParse(parts[2]);
+      if (a == null || b == null || c == null) return null;
+
+      if (parts[0].length == 4) {
+        return _validDate(year: a, month: b, day: c);
+      }
+      if (parts[2].length == 4) {
+        return _validDate(year: c, month: b, day: a);
+      }
+      final yy = _normalizeYear(c);
+      return _validDate(year: yy, month: b, day: a);
+    }
+
+    if (parts.length == 2) {
+      final a = int.tryParse(parts[0]);
+      final b = int.tryParse(parts[1]);
+      if (a == null || b == null) return null;
+
+      if (parts[0].length == 4) {
+        return _validMonthYear(year: a, month: b);
+      }
+      if (parts[1].length == 4) {
+        return _validMonthYear(year: b, month: a);
+      }
+      return _validMonthYear(year: _normalizeYear(b), month: a);
+    }
+
+    final digits = s.replaceAll('.', '');
+    if (digits.length == 8) {
+      if (digits.startsWith('20')) {
+        return _validDate(
+          year: int.parse(digits.substring(0, 4)),
+          month: int.parse(digits.substring(4, 6)),
+          day: int.parse(digits.substring(6, 8)),
+        );
+      }
+      return _validDate(
+        year: int.parse(digits.substring(4, 8)),
+        month: int.parse(digits.substring(2, 4)),
+        day: int.parse(digits.substring(0, 2)),
+      );
+    }
+
+    if (digits.length == 6) {
+      if (digits.startsWith('20')) {
+        return _validMonthYear(
+          year: int.parse(digits.substring(0, 4)),
+          month: int.parse(digits.substring(4, 6)),
+        );
+      }
+      if (digits.substring(2).startsWith('20')) {
+        return _validMonthYear(
+          year: int.parse(digits.substring(2, 6)),
+          month: int.parse(digits.substring(0, 2)),
+        );
+      }
+      return _validDate(
+        year: _normalizeYear(int.parse(digits.substring(4, 6))),
+        month: int.parse(digits.substring(2, 4)),
+        day: int.parse(digits.substring(0, 2)),
+      );
+    }
+
+    return null;
+  }
+
+  int _normalizeYear(int y) {
+    if (y >= 100) return y;
+    return y >= 70 ? 1900 + y : 2000 + y;
+  }
+
+  DateTime? _validDate({required int year, required int month, required int day}) {
+    if (year < 2000 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) {
+      return null;
+    }
+    final d = DateTime(year, month, day);
+    if (d.year != year || d.month != month || d.day != day) return null;
+    return d;
+  }
+
+  DateTime? _validMonthYear({required int year, required int month}) {
+    if (year < 2000 || year > 2100 || month < 1 || month > 12) return null;
+    // Для срока годности формата "месяц/год" берём последний день месяца.
+    return DateTime(year, month + 1, 0);
+  }
+
+
   String _formatDateRu(DateTime date) {
     final d = date.day.toString().padLeft(2, '0');
     final m = date.month.toString().padLeft(2, '0');
@@ -910,7 +1027,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     unawaited(_disposeCameraController(updateState: false));
     _detector.close();
-    _dateOcr.close();
+    _dateReader.dispose();
     super.dispose();
   }
 
