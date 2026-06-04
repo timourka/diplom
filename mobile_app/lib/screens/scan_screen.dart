@@ -59,6 +59,10 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   bool _magnifierBusy = false;
   int _magnifierEpoch = 0;
   File? _magnifierImageFile;
+  Rect? _magnifierCropRect;
+  Size? _magnifierImageSize;
+  bool _magnifierNeedsInitialTransform = false;
+  final TransformationController _magnifierTransformController = TransformationController();
   String _magnifierStatus = '';
   DetectionResult? _magnifierSourceDetection;
   DateTime? _magnifierRecognizedDate;
@@ -170,7 +174,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
       setState(() {
         _aiReady = ready;
         _aiStatus = ready
-            ? 'ИИ готова.'
+            ? 'ИИ готова'
             : 'Локальная модель не найдена. Зайди в настройки и обнови версию ИИ.';
       });
 
@@ -330,7 +334,6 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
       try {
         await controller.stopImageStream();
       } catch (_) {
-        // If plugin reports stale streaming state, recreate the camera cleanly.
         await _disposeCameraController(updateState: true);
         if (mounted && !_coveredByChildRoute) {
           await _initialize(forceRecreate: true);
@@ -341,6 +344,9 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
 
     final streamEpoch = expectedEpoch ?? _cameraEpoch;
     _scanActive = true;
+    if (mounted) {
+      setState(() => _aiStatus = _aiReady ? 'ИИ готова' : 'ИИ не готова');
+    }
 
     await controller.startImageStream((image) async {
       if (!_scanActive || _cameraEpoch != streamEpoch || !_aiReady || _aiBusy || !mounted) {
@@ -353,6 +359,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
       }
       _lastInferenceStarted = now;
       _aiBusy = true;
+      if (mounted) setState(() => _aiStatus = 'ИИ работает');
       final startedAt = DateTime.now();
 
       try {
@@ -365,42 +372,35 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
         );
         if (!mounted || !_scanActive || _cameraEpoch != streamEpoch) return;
 
-        final detections = frameResult.detections;
         final perf = frameResult.perf;
         final elapsed = DateTime.now().difference(startedAt);
-        final totalDuration = perf.totalMs > 0
-            ? Duration(milliseconds: perf.totalMs)
-            : elapsed;
+        final totalDuration = perf.totalMs > 0 ? Duration(milliseconds: perf.totalMs) : elapsed;
 
         setState(() {
-          _detections = detections;
+          _detections = frameResult.detections;
           _lastInferenceAt = DateTime.now();
           _lastInferenceDuration = totalDuration;
           _lastPerf = perf;
-          if (detections.isEmpty) {
-            _aiStatus = 'Дата на кадре не найдена. Время анализа: ${totalDuration.inMilliseconds} мс.';
-          } else {
-            final best = detections.first;
-            _aiStatus = 'Найдена область даты: ${best.label}, уверенность '
-                '${(best.confidence * 100).toStringAsFixed(1)}%. '
-                'Время анализа: ${totalDuration.inMilliseconds} мс.';
-          }
+          _aiStatus = 'ИИ готова';
         });
       } on TimeoutException {
         if (!mounted || !_scanActive || _cameraEpoch != streamEpoch) return;
+        debugPrint('[SCAN] Frame inference timeout');
         setState(() {
           _lastPerf = const FramePerf();
-          _aiStatus = 'Кадр пропущен: ИИ не успела завершить анализ вовремя.';
+          _aiStatus = 'ИИ готова';
         });
       } catch (e) {
         if (!mounted || !_scanActive || _cameraEpoch != streamEpoch) return;
+        debugPrint('[SCAN] AI error: $e');
         setState(() {
           _lastPerf = const FramePerf();
-          _aiStatus = 'Ошибка ИИ: $e';
+          _aiStatus = 'Ошибка ИИ';
         });
       } finally {
         if (_cameraEpoch == streamEpoch) {
           _aiBusy = false;
+          if (mounted && _scanActive) setState(() => _aiStatus = _aiReady ? 'ИИ готова' : 'ИИ не готова');
         }
       }
     });
@@ -451,9 +451,13 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
 
     setState(() {
       _magnifierBusy = true;
-      _magnifierStatus = 'Делаю снимок высокого разрешения и уточняю границы даты...';
+      _magnifierStatus = 'Делаю снимок, пожалуйста не двигайте';
       _magnifierSourceDetection = detection;
       _magnifierImageFile = null;
+      _magnifierCropRect = null;
+      _magnifierImageSize = null;
+      _magnifierNeedsInitialTransform = false;
+      _magnifierTransformController.value = Matrix4.identity();
       _magnifierRecognizedDate = null;
       _magnifierRecognizedDateText = null;
     });
@@ -463,7 +467,6 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
 
     try {
       await _pauseScanning(releaseCamera: true);
-      // Даём CameraX на Android немного времени закрыть предыдущую сессию перед новым high-res capture.
       await Future<void>.delayed(const Duration(milliseconds: 250));
 
       highResShot = await _captureHighResolutionStill(focusDetection: detection);
@@ -474,8 +477,9 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
         } catch (_) {}
         return;
       }
+
       setState(() {
-        _magnifierStatus = 'Уточняю границы даты на снимке высокого разрешения...';
+        _magnifierStatus = 'Обрабатываю изображение';
       });
 
       final refined = await _detector.detectFromImageFile(
@@ -489,18 +493,13 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
 
       final refinedDetection = _pickBestRefinedDetection(refined.detections, detection);
       final hasRefinedDetection = refinedDetection != null;
-      cropFile = await _createMagnifierCrop(
+      final cropResult = await _createMagnifierCrop(
         imagePath: highResShot.path,
         detection: refinedDetection ?? detection,
         fallbackDetection: detection,
         refined: hasRefinedDetection,
       );
-
-      try {
-        await File(highResShot.path).delete();
-      } catch (_) {
-        // Temporary camera file cleanup is best-effort.
-      }
+      cropFile = cropResult.cropFile;
 
       DateReaderResult? readerResult;
       DateTime? recognizedDate;
@@ -508,48 +507,48 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
       double readerConfidence = 0.0;
 
       try {
-        if (cropFile != null) {
-          readerResult = await _dateReader.recognizeFile(cropFile);
-          recognizedText = readerResult?.normalizedText;
-          readerConfidence = readerResult?.confidence ?? 0.0;
-          if (readerResult != null) {
-            recognizedDate = _parseDateReaderText(readerResult.normalizedText);
-          }
+        readerResult = await _dateReader.recognizeFile(cropFile);
+        recognizedText = readerResult?.normalizedText;
+        readerConfidence = readerResult?.confidence ?? 0.0;
+        if (readerResult != null) {
+          recognizedDate = _parseDateReaderText(readerResult.normalizedText);
         }
       } catch (e) {
-        readerResult = null;
-        recognizedDate = null;
-        recognizedText = null;
-        readerConfidence = 0.0;
+        debugPrint('[DATE_READER] error: $e');
       }
 
       if (!mounted || magnifierEpoch != _magnifierEpoch) {
         try {
-          if (cropFile != null && await cropFile.exists()) await cropFile.delete();
+          if (cropFile.existsSync()) await cropFile.delete();
+          await File(highResShot.path).delete();
         } catch (_) {}
         return;
       }
 
       const autoFillThreshold = 0.55;
       final canAutoFill = recognizedDate != null && readerConfidence >= autoFillThreshold;
-      final baseStatus = hasRefinedDetection
-          ? 'Область уточнена на снимке высокого разрешения. Уверенность детектора: '
-              '${((refinedDetection.confidence) * 100).toStringAsFixed(1)}%.'
-          : 'Показан фрагмент по месту клика.';
-      final readerStatus = recognizedText == null || recognizedText!.isEmpty
-          ? 'Дата не распознана.'
-          : canAutoFill
-              ? 'Распознана дата: ${_formatDateRu(recognizedDate!)} '
-                  '(текст: $recognizedText, уверенность OCR: ${(readerConfidence * 100).toStringAsFixed(0)}%).'
-              : 'OCR предположил "$recognizedText", но уверенность низкая: '
-                  '${(readerConfidence * 100).toStringAsFixed(0)}%. Дата не будет подставлена автоматически.';
+      debugPrint(
+        '[DATE_READER] raw=${readerResult?.rawText} normalized=$recognizedText '
+        'confidence=${readerConfidence.toStringAsFixed(3)} parsed=$recognizedDate '
+        'detectorRefined=$hasRefinedDetection detectorCount=${refined.detections.length}',
+      );
+
+      try {
+        if (cropFile.existsSync()) await cropFile.delete();
+      } catch (_) {}
+      cropFile = null;
 
       setState(() {
         _magnifierBusy = false;
-        _magnifierImageFile = cropFile;
+        _magnifierImageFile = File(highResShot!.path);
+        _magnifierCropRect = cropResult.cropRect;
+        _magnifierImageSize = cropResult.imageSize;
+        _magnifierNeedsInitialTransform = true;
         _magnifierRecognizedDate = canAutoFill ? recognizedDate : null;
         _magnifierRecognizedDateText = recognizedText;
-        _magnifierStatus = '$baseStatus $readerStatus';
+        _magnifierStatus = canAutoFill
+            ? 'Дата распознана: ${_formatDateRu(recognizedDate!)}'
+            : 'Дата не распознана';
       });
 
       if (canAutoFill) {
@@ -561,6 +560,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
         _showSnackBar('Дата не распознана');
       }
     } catch (e) {
+      debugPrint('[MAGNIFIER] error: $e');
       try {
         if (highResShot != null) await File(highResShot.path).delete();
       } catch (_) {}
@@ -568,24 +568,24 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
         if (cropFile != null && await cropFile.exists()) await cropFile.delete();
       } catch (_) {}
 
-      if (!mounted || magnifierEpoch != _magnifierEpoch) {
-        try {
-          if (cropFile != null && await cropFile.exists()) await cropFile.delete();
-        } catch (_) {}
-        return;
-      }
+      if (!mounted || magnifierEpoch != _magnifierEpoch) return;
       setState(() {
         _magnifierBusy = false;
         _magnifierImageFile = null;
+        _magnifierCropRect = null;
+        _magnifierImageSize = null;
+        _magnifierNeedsInitialTransform = false;
+        _magnifierTransformController.value = Matrix4.identity();
         _magnifierSourceDetection = null;
         _magnifierRecognizedDate = null;
         _magnifierRecognizedDateText = null;
         _magnifierStatus = '';
-        _aiStatus = 'Не удалось открыть лупу: $e';
+        _aiStatus = 'Не удалось открыть лупу';
       });
       await _resumeScanning(recreateCamera: true);
     }
   }
+
 
   DetectionResult? _pickBestRefinedDetection(
     List<DetectionResult> candidates,
@@ -685,7 +685,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<File> _createMagnifierCrop({
+  Future<_MagnifierCropResult> _createMagnifierCrop({
     required String imagePath,
     required DetectionResult detection,
     required DetectionResult fallbackDetection,
@@ -698,6 +698,8 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     }
 
     final oriented = img.bakeOrientation(decoded);
+    await File(imagePath).writeAsBytes(img.encodeJpg(oriented, quality: 96), flush: true);
+
     final cropRect = _normalizedDetectionToCropRect(
       refined ? detection : fallbackDetection,
       oriented.width,
@@ -713,11 +715,17 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
       height: math.max(1, cropRect.height.round()),
     );
 
-    final outPath = '${imagePath}_date_magnifier.jpg';
+    final outPath = '${imagePath}_date_reader_crop.jpg';
     final outFile = File(outPath);
     await outFile.writeAsBytes(img.encodeJpg(cropped, quality: 95), flush: true);
-    return outFile;
+
+    return _MagnifierCropResult(
+      cropFile: outFile,
+      cropRect: cropRect,
+      imageSize: Size(oriented.width.toDouble(), oriented.height.toDouble()),
+    );
   }
+
 
   Rect _normalizedDetectionToCropRect(
     DetectionResult detection,
@@ -763,6 +771,10 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
       setState(() {
         _magnifierBusy = false;
         _magnifierImageFile = null;
+        _magnifierCropRect = null;
+        _magnifierImageSize = null;
+        _magnifierNeedsInitialTransform = false;
+        _magnifierTransformController.value = Matrix4.identity();
         _magnifierSourceDetection = null;
         _magnifierRecognizedDate = null;
         _magnifierRecognizedDateText = null;
@@ -771,10 +783,15 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     } else {
       _magnifierBusy = false;
       _magnifierImageFile = null;
+      _magnifierCropRect = null;
+      _magnifierImageSize = null;
+      _magnifierNeedsInitialTransform = false;
+      _magnifierTransformController.value = Matrix4.identity();
       _magnifierSourceDetection = null;
       _magnifierRecognizedDate = null;
       _magnifierRecognizedDateText = null;
-      _magnifierStatus = '';    }
+      _magnifierStatus = '';
+    }
 
     try {
       if (imageFile != null && await imageFile.exists()) {
@@ -786,6 +803,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
       await _resumeScanning(recreateCamera: true);
     }
   }
+
 
   Future<void> _closeMagnifierForNavigation() async {
     if (!_magnifierActive) return;
@@ -951,76 +969,132 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     }
   }
 
+  void _scheduleMagnifierInitialTransform(Size viewportSize) {
+    if (!_magnifierNeedsInitialTransform) return;
+    final imageSize = _magnifierImageSize;
+    final cropRect = _magnifierCropRect;
+    if (imageSize == null || cropRect == null || viewportSize.isEmpty || cropRect.isEmpty) return;
+
+    _magnifierNeedsInitialTransform = false;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_magnifierActive || _magnifierImageSize != imageSize || _magnifierCropRect != cropRect) {
+        return;
+      }
+
+      final fitScale = math.min(
+        viewportSize.width / math.max(1.0, imageSize.width),
+        viewportSize.height / math.max(1.0, imageSize.height),
+      );
+      final cropScale = math.min(
+            viewportSize.width / math.max(1.0, cropRect.width),
+            viewportSize.height / math.max(1.0, cropRect.height),
+          ) *
+          0.72;
+      final scale = cropScale.clamp(fitScale, 18.0).toDouble();
+      final cropCenter = cropRect.center;
+      final dx = viewportSize.width / 2.0 - cropCenter.dx * scale;
+      final dy = viewportSize.height / 2.0 - cropCenter.dy * scale;
+
+      final matrix = Matrix4.identity()
+        ..setEntry(0, 0, scale)
+        ..setEntry(1, 1, scale)
+        ..setEntry(0, 3, dx)
+        ..setEntry(1, 3, dy);
+      _magnifierTransformController.value = matrix;
+    });
+  }
+
   Widget _buildMagnifierOverlay() {
     final imageFile = _magnifierImageFile;
+    final imageSize = _magnifierImageSize;
     final busy = _magnifierBusy;
 
     return Positioned.fill(
       child: Container(
-        color: Colors.black.withOpacity(0.96),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 84, 16, 88),
-            child: Column(
-              children: [
-                Expanded(
-                  child: Center(
-                    child: busy || imageFile == null
-                        ? Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const CircularProgressIndicator(),
-                              const SizedBox(height: 18),
-                              Text(
-                                _magnifierStatus.isEmpty ? 'Готовлю лупу...' : _magnifierStatus,
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(color: Colors.white, fontSize: 16),
-                              ),
-                            ],
-                          )
-                        : InteractiveViewer(
-                            minScale: 1,
-                            maxScale: 6,
-                            child: Image.file(
-                              imageFile,
-                              fit: BoxFit.contain,
-                              filterQuality: FilterQuality.high,
-                            ),
-                          ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  _magnifierStatus,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70),
-                ),
-                if (!busy && _magnifierRecognizedDate != null) ...[
-                  const SizedBox(height: 10),
-                  FilledButton.icon(
-                    onPressed: () => unawaited(
-                      _openManualAdd(
-                        initialExpiry: _magnifierRecognizedDate,
-                        keepMagnifier: true,
+        color: Colors.black,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (busy || imageFile == null || imageSize == null)
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const CircularProgressIndicator(),
+                      const SizedBox(height: 18),
+                      Text(
+                        _magnifierStatus.isEmpty ? 'Обрабатываю изображение' : _magnifierStatus,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.white, fontSize: 18),
                       ),
-                    ),
-                    icon: const Icon(Icons.add_shopping_cart),
-                    label: Text('Добавить продукт с датой ${_formatDateRu(_magnifierRecognizedDate!)}'),
+                    ],
                   ),
-                ],
-                const SizedBox(height: 12),
-                FilledButton.icon(
-                  onPressed: busy ? null : () => unawaited(_closeMagnifier()),
-                  icon: const Icon(Icons.camera_alt),
-                  label: const Text('Назад к сканированию'),
                 ),
-              ],
+              )
+            else
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final viewportSize = Size(constraints.maxWidth, constraints.maxHeight);
+                  _scheduleMagnifierInitialTransform(viewportSize);
+
+                  return InteractiveViewer(
+                    transformationController: _magnifierTransformController,
+                    constrained: false,
+                    boundaryMargin: const EdgeInsets.all(2500),
+                    minScale: 0.03,
+                    maxScale: 20,
+                    clipBehavior: Clip.none,
+                    child: Image.file(
+                      imageFile,
+                      width: imageSize.width,
+                      height: imageSize.height,
+                      fit: BoxFit.fill,
+                      filterQuality: FilterQuality.high,
+                    ),
+                  );
+                },
+              ),
+            SafeArea(
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 156),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.62),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Text(
+                      _magnifierStatus,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+              ),
             ),
-          ),
+            SafeArea(
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 92),
+                  child: FilledButton.icon(
+                    onPressed: busy ? null : () => unawaited(_closeMagnifier()),
+                    icon: const Icon(Icons.camera_alt),
+                    label: const Text('Назад к сканированию'),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
+
 
   @override
   void dispose() {
@@ -1028,6 +1102,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     unawaited(_disposeCameraController(updateState: false));
     _detector.close();
     _dateReader.dispose();
+    _magnifierTransformController.dispose();
     super.dispose();
   }
 
@@ -1073,95 +1148,26 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildAiPanel() {
-    final version = _localModelInfo?['modelVersionId']?.toString() ?? '—';
-    final format = _localModelInfo?['mobileFormat']?.toString() ?? '—';
-    final syncedAt = _localModelInfo?['syncedAt']?.toString();
-    final lastInferenceText = _lastInferenceAt == null
-        ? 'ещё не запускалась'
-        : _lastInferenceAt!.toLocal().toString().split('.').first;
-    final lastInferenceDuration = _lastInferenceDuration == null
-        ? '—'
-        : '${_lastInferenceDuration!.inMilliseconds} мс';
-    final perfBreakdown = _lastPerf.totalMs == 0 ? '—' : _lastPerf.toPrettyString();
+    final text = !_aiReady
+        ? 'ИИ не готова'
+        : _aiBusy
+            ? 'ИИ работает'
+            : 'ИИ готова';
 
     return Container(
       margin: const EdgeInsets.all(16),
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.65),
-        borderRadius: BorderRadius.circular(18),
+        color: Colors.black.withOpacity(0.48),
+        borderRadius: BorderRadius.circular(999),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Icon(
-                _aiReady ? Icons.smart_toy : Icons.smart_toy_outlined,
-                color: Colors.white,
-              ),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text(
-                  'ИИ на главном экране',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            _aiStatus,
-            style: const TextStyle(color: Colors.white),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            'Версия модели: #$version • Формат: $format',
-            style: const TextStyle(color: Colors.white70),
-          ),
-          if (syncedAt != null && syncedAt.isNotEmpty)
-            Text(
-              'Обновлена: $syncedAt',
-              style: const TextStyle(color: Colors.white70),
-            ),
-          Text(
-            'Последний анализ: $lastInferenceText',
-            style: const TextStyle(color: Colors.white70),
-          ),
-          Text(
-            'Длительность анализа: $lastInferenceDuration',
-            style: const TextStyle(color: Colors.white70),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'Разбивка: $perfBreakdown',
-            style: const TextStyle(color: Colors.white70, fontSize: 12),
-          ),
-          if (_detections.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: _detections
-                  .take(3)
-                  .map(
-                    (d) => Chip(
-                      label: Text('${d.label} ${(d.confidence * 100).toStringAsFixed(0)}%'),
-                      avatar: const Icon(Icons.visibility, size: 18),
-                    ),
-                  )
-                  .toList(),
-            ),
-          ],
-        ],
+      child: Text(
+        text,
+        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
       ),
     );
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -1343,6 +1349,18 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   }
 }
 
+class _MagnifierCropResult {
+  final File cropFile;
+  final Rect cropRect;
+  final Size imageSize;
+
+  const _MagnifierCropResult({
+    required this.cropFile,
+    required this.cropRect,
+    required this.imageSize,
+  });
+}
+
 class _DetectionOverlayPainter extends CustomPainter {
   final List<DetectionResult> detections;
   final Size previewContentSize;
@@ -1359,7 +1377,6 @@ class _DetectionOverlayPainter extends CustomPainter {
     }
 
     final fittedSizes = applyBoxFit(BoxFit.cover, previewContentSize, size);
-    final source = fittedSizes.source;
     final destination = fittedSizes.destination;
     final dx = (size.width - destination.width) / 2;
     final dy = (size.height - destination.height) / 2;
@@ -1369,8 +1386,6 @@ class _DetectionOverlayPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 3
       ..color = const Color(0xFF6BEE8A);
-
-    final fill = Paint()..color = const Color(0xCC1C1C1C);
 
     for (final detection in detections) {
       final left = dstRect.left + detection.left * dstRect.width;
@@ -1391,31 +1406,6 @@ class _DetectionOverlayPainter extends CustomPainter {
 
       canvas.drawRect(rect, paint);
 
-      final label = '${detection.label} ${(detection.confidence * 100).toStringAsFixed(0)}%';
-      final textPainter = TextPainter(
-        text: TextSpan(
-          text: label,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout(maxWidth: math.max(80, rect.width));
-
-      final bubble = RRect.fromRectAndRadius(
-        Rect.fromLTWH(
-          rect.left,
-          math.max(dstRect.top, rect.top - textPainter.height - 10),
-          textPainter.width + 14,
-          textPainter.height + 8,
-        ),
-        const Radius.circular(8),
-      );
-
-      canvas.drawRRect(bubble, fill);
-      textPainter.paint(canvas, Offset(bubble.left + 7, bubble.top + 4));
     }
   }
 

@@ -36,13 +36,24 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     super.dispose();
   }
 
+  DateTime _dateOnly(DateTime value) => DateTime(value.year, value.month, value.day);
+
   Future<void> _pickDate() async {
-    final now = DateTime.now();
+    final today = _dateOnly(DateTime.now());
+    final initial = _dateOnly(_expiry ?? today.add(const Duration(days: 7)));
+
+    // showDatePicker падает, если initialDate раньше firstDate.
+    // OCR может распознать уже прошедшую дату, поэтому календарь должен уметь
+    // открываться и для таких значений, чтобы пользователь мог исправить дату.
+    final firstDate = DateTime(2000, 1, 1);
+    final defaultLastDate = today.add(const Duration(days: 3650));
+    final lastDate = initial.isAfter(defaultLastDate) ? initial : defaultLastDate;
+
     final picked = await showDatePicker(
       context: context,
-      firstDate: now.subtract(const Duration(days: 1)),
-      lastDate: now.add(const Duration(days: 3650)),
-      initialDate: _expiry ?? now.add(const Duration(days: 7)),
+      firstDate: firstDate,
+      lastDate: lastDate,
+      initialDate: initial,
     );
     if (picked != null) setState(() => _expiry = picked);
   }
@@ -71,7 +82,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
       if (!mounted) return;
       Navigator.pop(context, true);
     } catch (e) {
-      setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _saving = false);
     }
