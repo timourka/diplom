@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ProductsDateAPI.Models;
@@ -8,7 +8,7 @@ namespace ProductsDateAPI.Controllers.Admin;
 
 [ApiController]
 [Route("api/admin/backup")]
-[Authorize]
+[Authorize(Policy = "AdminOnly")]
 public class AdminBackupController : ControllerBase
 {
     private readonly BackupService _backupService;

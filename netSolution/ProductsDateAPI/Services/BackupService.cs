@@ -136,7 +136,7 @@ public sealed class BackupService
         {
             Users = await _db.Users.AsNoTracking()
                 .OrderBy(x => x.Id)
-                .Select(x => new UserBackupDto(x.Id, x.Email, x.PasswordHash, x.IsBlocked, x.SettingsJson, x.CreatedAt))
+                .Select(x => new UserBackupDto(x.Id, x.Email, x.PasswordHash, x.IsBlocked, x.IsAdmin, x.SettingsJson, x.CreatedAt))
                 .ToListAsync(ct),
 
             Products = await _db.Products.AsNoTracking()
@@ -242,6 +242,7 @@ public sealed class BackupService
             Email = x.Email,
             PasswordHash = x.PasswordHash,
             IsBlocked = x.IsBlocked,
+            IsAdmin = x.IsAdmin,
             SettingsJson = x.SettingsJson,
             CreatedAt = x.CreatedAt
         }));
@@ -482,6 +483,7 @@ public sealed record UserBackupDto(
     string Email,
     string PasswordHash,
     bool IsBlocked,
+    bool IsAdmin,
     string? SettingsJson,
     DateTime CreatedAt);
 

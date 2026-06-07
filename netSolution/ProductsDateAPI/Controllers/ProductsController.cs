@@ -25,7 +25,9 @@ public class ProductsController : ControllerBase
         return p is null ? NotFound() : Ok(p);
     }
 
-    // Можно оставить открытым, но обычно создание/редактирование — админское.
+    // Пользовательский сценарий добавления товара работает через /api/storage:
+    // приложение передаёт название и дату, а сервер находит существующий Product или создаёт новый.
+    // Поэтому создание Product не является админской возможностью.
     [Authorize]
     [HttpPost]
     public async Task<ActionResult<Product>> Create(ProductCreateRequest req, CancellationToken ct)
@@ -41,7 +43,8 @@ public class ProductsController : ControllerBase
         return CreatedAtAction(nameof(Get), new { id = p.Id }, p);
     }
 
-    [Authorize]
+    // Редактирование справочника уже является административным действием.
+    [Authorize(Policy = "AdminOnly")]
     [HttpPut("{id:int}")]
     public async Task<ActionResult> Update(int id, ProductUpdateRequest req, CancellationToken ct)
     {
@@ -56,7 +59,7 @@ public class ProductsController : ControllerBase
         return NoContent();
     }
 
-    [Authorize]
+    [Authorize(Policy = "AdminOnly")]
     [HttpDelete("{id:int}")]
     public async Task<ActionResult> Delete(int id, CancellationToken ct)
     {

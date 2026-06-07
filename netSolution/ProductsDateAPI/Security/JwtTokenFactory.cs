@@ -19,6 +19,8 @@ public sealed class JwtTokenFactory
         {
             new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
             new(JwtRegisteredClaimNames.Email, user.Email),
+            new(ClaimTypes.Role, user.IsAdmin ? "Admin" : "User"),
+            new("is_admin", user.IsAdmin ? "1" : "0"),
             new("blocked", user.IsBlocked ? "1" : "0")
         };
 

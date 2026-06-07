@@ -1,4 +1,4 @@
-using Contracts.Dtos;
+﻿using Contracts.Dtos;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -10,7 +10,7 @@ namespace ProductsDateAPI.Controllers.Admin;
 
 [ApiController]
 [Route("api/admin/training")]
-[Authorize]
+[Authorize(Policy = "AdminOnly")]
 public class AdminTrainingController : ControllerBase
 {
     private readonly AppDbContext _db;

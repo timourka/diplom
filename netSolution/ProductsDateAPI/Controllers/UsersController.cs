@@ -22,7 +22,7 @@ public class UsersController : ControllerBase
         var u = await _db.Users.AsNoTracking().FirstOrDefaultAsync(x => x.Id == userId, ct);
         if (u is null) return NotFound();
 
-        return Ok(new UserProfileResponse(u.Id, u.Email, u.IsBlocked, u.SettingsJson));
+        return Ok(new UserProfileResponse(u.Id, u.Email, u.IsBlocked, u.IsAdmin, u.SettingsJson));
     }
 
     // опционально: обновление своих настроек (JSON)

@@ -12,6 +12,9 @@ public class User : BaseEntity
 
     public bool IsBlocked { get; set; } = false;
 
+    /// <summary>Признак административного профиля</summary>
+    public bool IsAdmin { get; set; } = false;
+
     /// <summary>Расширяемые настройки в JSON (может быть null/пусто)</summary>
     public string? SettingsJson { get; set; }
 

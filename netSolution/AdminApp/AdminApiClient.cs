@@ -1,4 +1,4 @@
-using System.Net.Http.Headers;
+﻿using System.Net.Http.Headers;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text;
@@ -249,6 +249,9 @@ public class AdminApiClient
 
         if (auth == null || string.IsNullOrWhiteSpace(auth.AccessToken))
             throw new Exception("Не удалось получить токен.");
+
+        if (!auth.IsAdmin)
+            throw new UnauthorizedAccessException("Этот профиль не является административным. Войдите под администратором.");
 
         return auth.AccessToken;
     }

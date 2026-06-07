@@ -321,6 +321,9 @@ namespace PostgreSQLRepository.Migrations
                     b.Property<bool>("IsBlocked")
                         .HasColumnType("boolean");
 
+                    b.Property<bool>("IsAdmin")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("PasswordHash")
                         .IsRequired()
                         .HasMaxLength(256)
@@ -333,6 +336,8 @@ namespace PostgreSQLRepository.Migrations
 
                     b.HasIndex("Email")
                         .IsUnique();
+
+                    b.HasIndex("IsAdmin");
 
                     b.ToTable("Users");
                 });

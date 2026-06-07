@@ -23,6 +23,9 @@ public class AppDbContext : DbContext
             .HasIndex(x => x.Email)
             .IsUnique();
 
+        modelBuilder.Entity<User>()
+            .HasIndex(x => x.IsAdmin);
+
         modelBuilder.Entity<Product>()
             .HasIndex(x => x.Barcode);
 

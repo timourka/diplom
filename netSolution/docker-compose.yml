@@ -41,6 +41,9 @@ services:
       TrainingService__StorageRoot: /app/storage/training
       Database__ApplyMigrations: ${APPLY_MIGRATIONS:-true}
       Swagger__Enabled: ${SWAGGER_ENABLED:-true}
+      AdminSeed__Enabled: ${ADMIN_SEED_ENABLED:-true}
+      AdminSeed__Email: ${ADMIN_EMAIL:-admin@productsdate.local}
+      AdminSeed__Password: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
     volumes:
       - api_storage:/app/storage
       - api_uploads:/app/uploads
@@ -49,6 +52,10 @@ services:
 
 volumes:
   postgres_data:
+    name: productsdate_postgres_data
   api_storage:
+    name: productsdate_api_storage
   api_uploads:
+    name: productsdate_api_uploads
   api_temp:
+    name: productsdate_api_temp

@@ -35,13 +35,14 @@ public class AuthController : ControllerBase
         {
             Email = email,
             PasswordHash = BCrypt.Net.BCrypt.HashPassword(req.Password),
-            IsBlocked = false
+            IsBlocked = false,
+            IsAdmin = false
         };
 
         _db.Users.Add(user);
         await _db.SaveChangesAsync(ct);
 
-        return Ok(new AuthResponse(_jwt.CreateForUser(user)));
+        return Ok(new AuthResponse(_jwt.CreateForUser(user), user.IsAdmin));
     }
 
     [HttpPost("login")]
@@ -56,6 +57,6 @@ public class AuthController : ControllerBase
         var ok = BCrypt.Net.BCrypt.Verify(req.Password, user.PasswordHash);
         if (!ok) return Unauthorized("Invalid credentials.");
 
-        return Ok(new AuthResponse(_jwt.CreateForUser(user)));
+        return Ok(new AuthResponse(_jwt.CreateForUser(user), user.IsAdmin));
     }
 }

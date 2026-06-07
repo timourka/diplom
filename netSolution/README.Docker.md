@@ -20,8 +20,12 @@ nano .env
 - `POSTGRES_PASSWORD`
 - `JWT_SECRET`
 - `TRAINING_CLIENT_API_KEY`
+- `ADMIN_EMAIL`
+- `ADMIN_PASSWORD`
 
 `TRAINING_CLIENT_API_KEY` должен быть таким же, как переменная `TRAINING_CLIENT_API_KEY` у Python-клиента обучения.
+
+`ADMIN_EMAIL` и `ADMIN_PASSWORD` используются только для первичного создания административного профиля при старте API. Если профиль с таким email уже есть, пароль при следующих запусках не перезаписывается, чтобы изменения на сервере не слетали.
 
 ## 3. Запустить
 
@@ -61,7 +65,7 @@ APPLY_MIGRATIONS=true
 
 Тогда API при старте сам выполнит `db.Database.Migrate()` и применит EF Core миграции.
 
-После первого успешного запуска можно поставить:
+Миграции не очищают существующие таблицы, а только применяют изменения схемы. При обновлении версии backend, в которой появились новые миграции, оставь `APPLY_MIGRATIONS=true` хотя бы на первый запуск после обновления. После успешного запуска можно поставить:
 
 ```text
 APPLY_MIGRATIONS=false
@@ -77,12 +81,12 @@ docker compose up -d
 
 Docker volumes:
 
-- `postgres_data` — база PostgreSQL
-- `api_storage` — модели, датасеты задач обучения, артефакты
-- `api_uploads` — загруженные датасеты/видео из error reports
-- `api_temp` — временные файлы упаковки датасета
+- `productsdate_postgres_data` — база PostgreSQL
+- `productsdate_api_storage` — модели, датасеты задач обучения, артефакты
+- `productsdate_api_uploads` — загруженные датасеты/видео из error reports
+- `productsdate_api_temp` — временные файлы упаковки датасета
 
-Важно: не удаляй volumes, если не хочешь потерять данные.
+Важно: не удаляй volumes, если не хочешь потерять данные. Обычное обновление API через `docker compose build api` и `docker compose up -d api` не удаляет `postgres_data`. Данные удаляются только при явном `docker compose down -v` или ручном удалении volume.
 
 ## 7. Seed dataset
 

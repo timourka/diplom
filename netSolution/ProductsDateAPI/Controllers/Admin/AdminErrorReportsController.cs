@@ -9,7 +9,7 @@ namespace ProductsDateAPI.Controllers.Admin;
 
 [ApiController]
 [Route("api/admin/error-reports")]
-[Authorize]
+[Authorize(Policy = "AdminOnly")]
 public class AdminErrorReportsController : ControllerBase
 {
     private readonly AppDbContext _db;
