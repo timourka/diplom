@@ -1,4 +1,7 @@
 @startuml
+
+skinparam defaultFontSize 22
+
 left to right direction
 title Диаграмма состояний бэкенд-сервера
 
