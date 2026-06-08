@@ -1,4 +1,5 @@
-﻿using System.Net.Http.Headers;
+﻿using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text;
@@ -15,6 +16,8 @@ public class AdminApiClient
         PropertyNameCaseInsensitive = true
     };
 
+    public event Func<Task<string?>>? ReauthenticationRequested;
+
     public AdminApiClient(string baseUrl, string jwtToken)
     {
         _http = new HttpClient
@@ -23,40 +26,53 @@ public class AdminApiClient
             Timeout = TimeSpan.FromMinutes(30)
         };
 
+        SetAccessToken(jwtToken);
+    }
+
+    public void SetAccessToken(string jwtToken)
+    {
         _http.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", jwtToken);
     }
 
+    public void ClearAccessToken()
+    {
+        _http.DefaultRequestHeaders.Authorization = null;
+    }
+
     public async Task<List<AdminErrorReportListItemDto>> GetErrorReportsAsync(CancellationToken ct = default)
     {
-        var result = await _http.GetFromJsonAsync<List<AdminErrorReportListItemDto>>(
-            "api/admin/error-reports", _jsonOptions, ct);
+        var result = await GetFromJsonWithAuthRetryAsync<List<AdminErrorReportListItemDto>>(
+            "api/admin/error-reports", ct);
 
         return result ?? new List<AdminErrorReportListItemDto>();
     }
 
     public async Task<AdminErrorReportDetailsDto?> GetErrorReportAsync(int reportId, CancellationToken ct = default)
     {
-        return await _http.GetFromJsonAsync<AdminErrorReportDetailsDto>(
-            $"api/admin/error-reports/{reportId}", _jsonOptions, ct);
+        return await GetFromJsonWithAuthRetryAsync<AdminErrorReportDetailsDto>(
+            $"api/admin/error-reports/{reportId}", ct);
     }
 
     public async Task<Image?> GetFrameImageAsync(int reportId, int frameIndex, CancellationToken ct = default)
     {
-        using var response = await _http.GetAsync(
-            $"api/admin/error-reports/{reportId}/frames/{frameIndex}", ct);
+        using var response = await SendWithAuthRetryAsync(
+            () => new HttpRequestMessage(HttpMethod.Get, $"api/admin/error-reports/{reportId}/frames/{frameIndex}"),
+            ct);
 
         if (!response.IsSuccessStatusCode)
             return null;
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        return Image.FromStream(stream);
+        using var sourceImage = Image.FromStream(stream);
+        return new Bitmap(sourceImage);
     }
 
     public async Task<List<YoloBboxDto>> GetFrameBboxesAsync(int reportId, int frameIndex, CancellationToken ct = default)
     {
-        using var response = await _http.GetAsync(
-            $"api/admin/error-reports/{reportId}/frames/{frameIndex}/bboxes", ct);
+        using var response = await SendWithAuthRetryAsync(
+            () => new HttpRequestMessage(HttpMethod.Get, $"api/admin/error-reports/{reportId}/frames/{frameIndex}/bboxes"),
+            ct);
 
         if (response.IsSuccessStatusCode)
         {
@@ -66,8 +82,9 @@ public class AdminApiClient
         }
 
         // Fallback для старой версии API, где возвращалась только одна рамка.
-        using var fallbackResponse = await _http.GetAsync(
-            $"api/admin/error-reports/{reportId}/frames/{frameIndex}/bbox", ct);
+        using var fallbackResponse = await SendWithAuthRetryAsync(
+            () => new HttpRequestMessage(HttpMethod.Get, $"api/admin/error-reports/{reportId}/frames/{frameIndex}/bbox"),
+            ct);
 
         if (!fallbackResponse.IsSuccessStatusCode)
             return new List<YoloBboxDto>();
@@ -80,18 +97,18 @@ public class AdminApiClient
     public async Task SetReportApprovedAsync(int reportId, bool approved, CancellationToken ct = default)
     {
         var body = JsonSerializer.Serialize(new ApproveErrorReportRequest(approved));
-        using var content = new StringContent(body, Encoding.UTF8, "application/json");
-
-        using var response = await _http.PutAsync(
-            $"api/admin/error-reports/{reportId}/approve", content, ct);
+        using var response = await SendWithAuthRetryAsync(
+            () => CreateJsonRequest(HttpMethod.Put, $"api/admin/error-reports/{reportId}/approve", body),
+            ct);
 
         response.EnsureSuccessStatusCode();
     }
 
     public async Task DeleteReportAsync(int reportId, CancellationToken ct = default)
     {
-        using var response = await _http.DeleteAsync(
-            $"api/admin/error-reports/{reportId}", ct);
+        using var response = await SendWithAuthRetryAsync(
+            () => new HttpRequestMessage(HttpMethod.Delete, $"api/admin/error-reports/{reportId}"),
+            ct);
 
         response.EnsureSuccessStatusCode();
     }
@@ -99,17 +116,22 @@ public class AdminApiClient
     public async Task BlockUserAsync(int userId, bool isBlocked, CancellationToken ct = default)
     {
         var body = JsonSerializer.Serialize(new SetBlockedRequest(isBlocked));
-        using var content = new StringContent(body, Encoding.UTF8, "application/json");
-
-        using var response = await _http.PutAsync(
-            $"api/admin/users/{userId}/block", content, ct);
+        using var response = await SendWithAuthRetryAsync(
+            () => CreateJsonRequest(HttpMethod.Put, $"api/admin/users/{userId}/block", body),
+            ct);
 
         response.EnsureSuccessStatusCode();
     }
 
     public async Task<TrainingJobStartResponse> StartTrainingAsync(StartTrainingRequest request, CancellationToken ct = default)
     {
-        using var response = await _http.PostAsJsonAsync("api/admin/training/start", request, ct);
+        using var response = await SendWithAuthRetryAsync(
+            () => new HttpRequestMessage(HttpMethod.Post, "api/admin/training/start")
+            {
+                Content = JsonContent.Create(request)
+            },
+            ct);
+
         response.EnsureSuccessStatusCode();
 
         var result = await response.Content.ReadFromJsonAsync<TrainingJobStartResponse>(_jsonOptions, ct);
@@ -118,18 +140,21 @@ public class AdminApiClient
 
     public async Task<List<TrainingJobStatusResponse>> GetTrainingJobsAsync(CancellationToken ct = default)
     {
-        var result = await _http.GetFromJsonAsync<List<TrainingJobStatusResponse>>(
-            "api/admin/training/jobs", _jsonOptions, ct);
+        var result = await GetFromJsonWithAuthRetryAsync<List<TrainingJobStatusResponse>>(
+            "api/admin/training/jobs", ct);
 
         return result ?? new List<TrainingJobStatusResponse>();
     }
 
     public async Task<TrainingJobStatusResponse?> GetTrainingJobAsync(string jobId, CancellationToken ct = default)
-        => await _http.GetFromJsonAsync<TrainingJobStatusResponse>($"api/admin/training/jobs/{jobId}", _jsonOptions, ct);
+        => await GetFromJsonWithAuthRetryAsync<TrainingJobStatusResponse>($"api/admin/training/jobs/{jobId}", ct);
 
     public async Task<TrainingJobStatusResponse> CancelTrainingJobAsync(string jobId, CancellationToken ct = default)
     {
-        using var response = await _http.PostAsync($"api/admin/training/jobs/{jobId}/cancel", content: null, ct);
+        using var response = await SendWithAuthRetryAsync(
+            () => new HttpRequestMessage(HttpMethod.Post, $"api/admin/training/jobs/{jobId}/cancel"),
+            ct);
+
         response.EnsureSuccessStatusCode();
 
         var result = await response.Content.ReadFromJsonAsync<TrainingJobStatusResponse>(_jsonOptions, ct);
@@ -139,50 +164,69 @@ public class AdminApiClient
 
     public async Task<List<ModelVersionAdminResponse>> GetModelVersionsAsync(CancellationToken ct = default)
     {
-        var result = await _http.GetFromJsonAsync<List<ModelVersionAdminResponse>>(
-            "api/admin/training/model-versions", _jsonOptions, ct);
+        var result = await GetFromJsonWithAuthRetryAsync<List<ModelVersionAdminResponse>>(
+            "api/admin/training/model-versions", ct);
 
         return result ?? new List<ModelVersionAdminResponse>();
     }
 
     public async Task<ModelVersionAdminResponse> PublishModelVersionAsync(int id, CancellationToken ct = default)
     {
-        using var response = await _http.PostAsync($"api/admin/training/model-versions/{id}/publish", content: null, ct);
+        using var response = await SendWithAuthRetryAsync(
+            () => new HttpRequestMessage(HttpMethod.Post, $"api/admin/training/model-versions/{id}/publish"),
+            ct);
+
         response.EnsureSuccessStatusCode();
         return await ReadModelVersionResponseAsync(response, ct);
     }
 
     public async Task<ModelVersionAdminResponse> UnpublishModelVersionAsync(int id, CancellationToken ct = default)
     {
-        using var response = await _http.PostAsync($"api/admin/training/model-versions/{id}/unpublish", content: null, ct);
+        using var response = await SendWithAuthRetryAsync(
+            () => new HttpRequestMessage(HttpMethod.Post, $"api/admin/training/model-versions/{id}/unpublish"),
+            ct);
+
         response.EnsureSuccessStatusCode();
         return await ReadModelVersionResponseAsync(response, ct);
     }
 
     public async Task<ModelVersionAdminResponse> PinModelVersionAsync(int id, CancellationToken ct = default)
     {
-        using var response = await _http.PostAsync($"api/admin/training/model-versions/{id}/pin", content: null, ct);
+        using var response = await SendWithAuthRetryAsync(
+            () => new HttpRequestMessage(HttpMethod.Post, $"api/admin/training/model-versions/{id}/pin"),
+            ct);
+
         response.EnsureSuccessStatusCode();
         return await ReadModelVersionResponseAsync(response, ct);
     }
 
     public async Task<ModelVersionAdminResponse> UnpinModelVersionAsync(int id, CancellationToken ct = default)
     {
-        using var response = await _http.PostAsync($"api/admin/training/model-versions/{id}/unpin", content: null, ct);
+        using var response = await SendWithAuthRetryAsync(
+            () => new HttpRequestMessage(HttpMethod.Post, $"api/admin/training/model-versions/{id}/unpin"),
+            ct);
+
         response.EnsureSuccessStatusCode();
         return await ReadModelVersionResponseAsync(response, ct);
     }
 
     public async Task DeleteModelVersionAsync(int id, bool force = false, CancellationToken ct = default)
     {
-        using var response = await _http.DeleteAsync($"api/admin/training/model-versions/{id}?force={force.ToString().ToLowerInvariant()}", ct);
+        using var response = await SendWithAuthRetryAsync(
+            () => new HttpRequestMessage(HttpMethod.Delete, $"api/admin/training/model-versions/{id}?force={force.ToString().ToLowerInvariant()}"),
+            ct);
+
         response.EnsureSuccessStatusCode();
     }
 
 
     public async Task<string> ExportBackupAsync(string destinationPath, CancellationToken ct = default)
     {
-        using var response = await _http.GetAsync("api/admin/backup/export", HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await SendWithAuthRetryAsync(
+            () => new HttpRequestMessage(HttpMethod.Get, "api/admin/backup/export"),
+            ct,
+            HttpCompletionOption.ResponseHeadersRead);
+
         response.EnsureSuccessStatusCode();
 
         var fileName = response.Content.Headers.ContentDisposition?.FileNameStar
@@ -202,16 +246,9 @@ public class AdminApiClient
 
     public async Task<BackupImportResultDto> ImportBackupAsync(string backupZipPath, bool replaceExisting, CancellationToken ct = default)
     {
-        await using var fileStream = File.OpenRead(backupZipPath);
-        using var content = new MultipartFormDataContent();
-
-        var fileContent = new StreamContent(fileStream);
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
-
-        content.Add(fileContent, "BackupZip", Path.GetFileName(backupZipPath));
-        content.Add(new StringContent(replaceExisting.ToString().ToLowerInvariant()), "ReplaceExisting");
-
-        using var response = await _http.PostAsync("api/admin/backup/import", content, ct);
+        using var response = await SendWithAuthRetryAsync(
+            () => CreateBackupImportRequest(backupZipPath, replaceExisting),
+            ct);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -223,6 +260,86 @@ public class AdminApiClient
 
         var result = await response.Content.ReadFromJsonAsync<BackupImportResultDto>(_jsonOptions, ct);
         return result ?? throw new Exception("Пустой ответ от сервера после импорта backup.");
+    }
+
+    private async Task<T?> GetFromJsonWithAuthRetryAsync<T>(string requestUri, CancellationToken ct)
+    {
+        using var response = await SendWithAuthRetryAsync(
+            () => new HttpRequestMessage(HttpMethod.Get, requestUri),
+            ct);
+
+        response.EnsureSuccessStatusCode();
+
+        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        return await JsonSerializer.DeserializeAsync<T>(stream, _jsonOptions, ct);
+    }
+
+    private async Task<HttpResponseMessage> SendWithAuthRetryAsync(
+        Func<HttpRequestMessage> requestFactory,
+        CancellationToken ct,
+        HttpCompletionOption completionOption = HttpCompletionOption.ResponseContentRead)
+    {
+        using var request = requestFactory();
+        var response = await _http.SendAsync(request, completionOption, ct);
+
+        if (!IsAuthorizationFailure(response.StatusCode))
+            return response;
+
+        response.Dispose();
+
+        var refreshedToken = await RequestReauthenticationAsync();
+        SetAccessToken(refreshedToken);
+
+        using var retryRequest = requestFactory();
+        response = await _http.SendAsync(retryRequest, completionOption, ct);
+
+        if (IsAuthorizationFailure(response.StatusCode))
+        {
+            response.Dispose();
+            throw new UnauthorizedAccessException("Вход выполнен, но сервер всё равно отказал в доступе. Проверьте, что используется административный профиль.");
+        }
+
+        return response;
+    }
+
+    private async Task<string> RequestReauthenticationAsync()
+    {
+        if (ReauthenticationRequested is null)
+            throw new UnauthorizedAccessException("Сессия администратора истекла. Войдите повторно.");
+
+        var token = await ReauthenticationRequested.Invoke();
+        if (string.IsNullOrWhiteSpace(token))
+            throw new UnauthorizedAccessException("Сессия администратора истекла, повторный вход не выполнен.");
+
+        return token;
+    }
+
+    private static bool IsAuthorizationFailure(HttpStatusCode statusCode)
+        => statusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
+
+    private static HttpRequestMessage CreateJsonRequest(HttpMethod method, string requestUri, string body)
+    {
+        return new HttpRequestMessage(method, requestUri)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json")
+        };
+    }
+
+    private static HttpRequestMessage CreateBackupImportRequest(string backupZipPath, bool replaceExisting)
+    {
+        var fileStream = File.OpenRead(backupZipPath);
+        var content = new MultipartFormDataContent();
+
+        var fileContent = new StreamContent(fileStream);
+        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
+
+        content.Add(fileContent, "BackupZip", Path.GetFileName(backupZipPath));
+        content.Add(new StringContent(replaceExisting.ToString().ToLowerInvariant()), "ReplaceExisting");
+
+        return new HttpRequestMessage(HttpMethod.Post, "api/admin/backup/import")
+        {
+            Content = content
+        };
     }
 
     private async Task<ModelVersionAdminResponse> ReadModelVersionResponseAsync(HttpResponseMessage response, CancellationToken ct)

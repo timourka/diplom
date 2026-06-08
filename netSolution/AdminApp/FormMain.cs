@@ -2,17 +2,18 @@
 
 public partial class FormMain : Form
 {
-    private readonly string _token;
     private readonly AdminApiClient _api;
+    private bool _reauthInProgress;
+
+    public bool LoggedOut { get; private set; }
 
     public FormMain(string token)
     {
         InitializeComponent();
 
-        _token = token;
-
         var settings = AdminSettings.Load();
-        _api = new AdminApiClient(settings.ApiBaseUrl, _token);
+        _api = new AdminApiClient(settings.ApiBaseUrl, token);
+        _api.ReauthenticationRequested += RequestReauthenticationAsync;
 
         Text = "Админка";
         Width = 560;
@@ -33,6 +34,16 @@ public partial class FormMain : Form
             Font = new Font("Segoe UI", 16, FontStyle.Bold),
             Location = new Point(20, 20)
         };
+
+        var btnLogout = new Button
+        {
+            Text = "Выйти",
+            Width = 110,
+            Height = 34,
+            Location = new Point(410, 20)
+        };
+
+        btnLogout.Click += (_, _) => Logout();
 
         var btnErrorReports = new Button
         {
@@ -91,9 +102,48 @@ public partial class FormMain : Form
         };
 
         Controls.Add(lblTitle);
+        Controls.Add(btnLogout);
         Controls.Add(btnErrorReports);
         Controls.Add(btnTraining);
         Controls.Add(btnModelVersions);
         Controls.Add(btnBackup);
+    }
+
+    private void Logout()
+    {
+        _api.ClearAccessToken();
+        LoggedOut = true;
+        Close();
+    }
+
+    private async Task<string?> RequestReauthenticationAsync()
+    {
+        if (_reauthInProgress)
+            return null;
+
+        _reauthInProgress = true;
+        try
+        {
+            MessageBox.Show(
+                this,
+                "Сессия администратора истекла или сервер запросил повторный вход. Войдите снова, после этого текущая операция продолжится автоматически.",
+                "Повторная авторизация",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+
+            using var loginForm = new FormLogin
+            {
+                StartPosition = FormStartPosition.CenterParent
+            };
+
+            var owner = ActiveForm ?? this;
+            return loginForm.ShowDialog(owner) == DialogResult.OK
+                ? loginForm.Token
+                : null;
+        }
+        finally
+        {
+            _reauthInProgress = false;
+        }
     }
 }

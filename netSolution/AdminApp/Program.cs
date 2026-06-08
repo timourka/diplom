@@ -7,10 +7,17 @@ internal static class Program
     {
         ApplicationConfiguration.Initialize();
 
-        using var loginForm = new FormLogin();
-        if (loginForm.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(loginForm.Token))
+        while (true)
         {
-            Application.Run(new FormMain(loginForm.Token));
+            using var loginForm = new FormLogin();
+            if (loginForm.ShowDialog() != DialogResult.OK || string.IsNullOrWhiteSpace(loginForm.Token))
+                return;
+
+            using var mainForm = new FormMain(loginForm.Token);
+            Application.Run(mainForm);
+
+            if (!mainForm.LoggedOut)
+                return;
         }
     }
 }
