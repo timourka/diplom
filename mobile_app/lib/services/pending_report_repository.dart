@@ -16,7 +16,7 @@ class PendingReportRepository {
       return decoded
           .whereType<Map>()
           .map((x) => x.map((key, value) => MapEntry(key.toString(), value)))
-          .toList(growable: false);
+          .toList(growable: true);
     } catch (_) {
       return <Map<String, dynamic>>[];
     }
