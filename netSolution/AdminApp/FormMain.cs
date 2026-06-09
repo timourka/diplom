@@ -17,7 +17,7 @@ public partial class FormMain : Form
 
         Text = "Админка";
         Width = 560;
-        Height = 390;
+        Height = 460;
         StartPosition = FormStartPosition.CenterScreen;
 
         BuildUi();
@@ -101,12 +101,27 @@ public partial class FormMain : Form
             form.ShowDialog(this);
         };
 
+        var btnUsers = new Button
+        {
+            Text = "Управление пользователями",
+            Width = 220,
+            Height = 50,
+            Location = new Point(20, 220)
+        };
+
+        btnUsers.Click += (_, _) =>
+        {
+            using var form = new FormUsers(_api);
+            form.ShowDialog(this);
+        };
+
         Controls.Add(lblTitle);
         Controls.Add(btnLogout);
         Controls.Add(btnErrorReports);
         Controls.Add(btnTraining);
         Controls.Add(btnModelVersions);
         Controls.Add(btnBackup);
+        Controls.Add(btnUsers);
     }
 
     private void Logout()

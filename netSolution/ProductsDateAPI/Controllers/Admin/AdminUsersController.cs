@@ -29,11 +29,66 @@ public class AdminUsersController : ControllerBase
     }
 
     [HttpGet("{id:int}")]
-    public async Task<ActionResult<AdminUserListItem>> Get(int id, CancellationToken ct)
+    public async Task<ActionResult<AdminUserDetailsDto>> Get(int id, CancellationToken ct)
     {
         var u = await _db.Users.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
         if (u is null) return NotFound();
-        return Ok(new AdminUserListItem(u.Id, u.Email, u.IsBlocked, u.IsAdmin, u.CreatedAt));
+
+        var storedProductsCount = await _db.StoredProducts.CountAsync(x => x.UserId == id, ct);
+        var errorReportsCount = await _db.ErrorReports.CountAsync(x => x.UserId == id, ct);
+        var approvedReportsCount = await _db.ErrorReports.CountAsync(x => x.UserId == id && x.Approved, ct);
+
+        return Ok(new AdminUserDetailsDto(
+            u.Id,
+            u.Email,
+            u.IsBlocked,
+            u.IsAdmin,
+            u.CreatedAt,
+            u.SettingsJson,
+            storedProductsCount,
+            errorReportsCount,
+            approvedReportsCount));
+    }
+
+    [HttpPut("{id:int}")]
+    public async Task<ActionResult<AdminUserDetailsDto>> Update(int id, AdminUserUpdateRequest req, CancellationToken ct)
+    {
+        var u = await _db.Users.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (u is null) return NotFound();
+
+        var currentUserId = User.GetUserIdOrThrow();
+        var login = (req.Login ?? string.Empty).Trim();
+
+        if (string.IsNullOrWhiteSpace(login))
+            return BadRequest("Логин не может быть пустым.");
+
+        var loginExists = await _db.Users.AnyAsync(x => x.Id != id && x.Email == login, ct);
+        if (loginExists)
+            return Conflict("Пользователь с таким логином уже существует.");
+
+        if (u.Id == currentUserId && req.IsBlocked)
+            return BadRequest("Нельзя заблокировать собственный административный профиль.");
+
+        if (u.Id == currentUserId && !req.IsAdmin)
+            return BadRequest("Нельзя снять административные права с собственного профиля.");
+
+        if (u.IsAdmin && (!req.IsAdmin || req.IsBlocked))
+        {
+            var hasAnotherActiveAdmin = await _db.Users
+                .AnyAsync(x => x.Id != id && x.IsAdmin && !x.IsBlocked, ct);
+
+            if (!hasAnotherActiveAdmin)
+                return BadRequest("Нельзя оставить систему без активного администратора.");
+        }
+
+        u.Email = login;
+        u.IsBlocked = req.IsBlocked;
+        u.IsAdmin = req.IsAdmin;
+        u.SettingsJson = string.IsNullOrWhiteSpace(req.SettingsJson) ? null : req.SettingsJson;
+
+        await _db.SaveChangesAsync(ct);
+
+        return await Get(id, ct);
     }
 
     [HttpPut("{id:int}/block")]
@@ -41,6 +96,10 @@ public class AdminUsersController : ControllerBase
     {
         var u = await _db.Users.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (u is null) return NotFound();
+
+        var currentUserId = User.GetUserIdOrThrow();
+        if (u.Id == currentUserId && req.IsBlocked)
+            return BadRequest("Нельзя заблокировать собственный административный профиль.");
 
         if (u.IsAdmin && req.IsBlocked)
         {

@@ -30,7 +30,7 @@ public partial class FormLogin : Form
 
         var lblEmail = new Label
         {
-            Text = "Email",
+            Text = "Логин",
             Left = 20,
             Top = 20,
             Width = 100

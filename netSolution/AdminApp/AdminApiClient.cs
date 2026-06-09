@@ -113,6 +113,52 @@ public class AdminApiClient
         response.EnsureSuccessStatusCode();
     }
 
+
+    public async Task<List<AdminUserListItem>> GetUsersAsync(CancellationToken ct = default)
+    {
+        var result = await GetFromJsonWithAuthRetryAsync<List<AdminUserListItem>>("api/admin/users", ct);
+        return result ?? new List<AdminUserListItem>();
+    }
+
+    public async Task<AdminUserDetailsDto?> GetUserAsync(int userId, CancellationToken ct = default)
+        => await GetFromJsonWithAuthRetryAsync<AdminUserDetailsDto>($"api/admin/users/{userId}", ct);
+
+    public async Task<AdminUserDetailsDto> UpdateUserAsync(int userId, AdminUserUpdateRequest request, CancellationToken ct = default)
+    {
+        using var response = await SendWithAuthRetryAsync(
+            () => new HttpRequestMessage(HttpMethod.Put, $"api/admin/users/{userId}")
+            {
+                Content = JsonContent.Create(request)
+            },
+            ct);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = await response.Content.ReadAsStringAsync(ct);
+            throw new HttpRequestException(string.IsNullOrWhiteSpace(error)
+                ? $"Ошибка сохранения пользователя: {(int)response.StatusCode} {response.ReasonPhrase}"
+                : error);
+        }
+
+        var result = await response.Content.ReadFromJsonAsync<AdminUserDetailsDto>(_jsonOptions, ct);
+        return result ?? throw new Exception("Пустой ответ от сервера после сохранения пользователя.");
+    }
+
+    public async Task DeleteUserAsync(int userId, CancellationToken ct = default)
+    {
+        using var response = await SendWithAuthRetryAsync(
+            () => new HttpRequestMessage(HttpMethod.Delete, $"api/admin/users/{userId}"),
+            ct);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = await response.Content.ReadAsStringAsync(ct);
+            throw new HttpRequestException(string.IsNullOrWhiteSpace(error)
+                ? $"Ошибка удаления пользователя: {(int)response.StatusCode} {response.ReasonPhrase}"
+                : error);
+        }
+    }
+
     public async Task BlockUserAsync(int userId, bool isBlocked, CancellationToken ct = default)
     {
         var body = JsonSerializer.Serialize(new SetBlockedRequest(isBlocked));
