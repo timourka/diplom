@@ -67,6 +67,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       appBar: AppBar(
         title: Text(widget.title),
         actions: [
@@ -77,57 +78,52 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            if (widget.message != null && widget.message!.isNotEmpty) ...[
+      body: SafeArea(
+        child: SingleChildScrollView(
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                controller: _email,
+                decoration: const InputDecoration(labelText: 'Логин'),
+                keyboardType: TextInputType.text,
+              ),
+              TextField(
+                controller: _pass,
+                decoration: const InputDecoration(labelText: 'Пароль'),
+                obscureText: true,
+              ),
+              const SizedBox(height: 12),
               Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Text(widget.message!),
+                child: ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  leading: const Icon(Icons.lan),
+                  title: const Text('Адрес API'),
+                  subtitle: Text(ApiConfig.baseUrl),
+                  trailing: TextButton(
+                    onPressed: _loading ? null : _openSettings,
+                    child: const Text('Изменить'),
+                  ),
                 ),
               ),
               const SizedBox(height: 12),
-            ],
-            TextField(
-              controller: _email,
-              decoration: const InputDecoration(labelText: 'Логин'),
-              keyboardType: TextInputType.text,
-            ),
-            TextField(
-              controller: _pass,
-              decoration: const InputDecoration(labelText: 'Пароль'),
-              obscureText: true,
-            ),
-            const SizedBox(height: 12),
-            Card(
-              child: ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                leading: const Icon(Icons.lan),
-                title: const Text('Адрес API'),
-                subtitle: Text(ApiConfig.baseUrl),
-                trailing: TextButton(
-                  onPressed: _loading ? null : _openSettings,
-                  child: const Text('Изменить'),
+              if (_error != null) Text(_error!, style: const TextStyle(color: Colors.red)),
+              const SizedBox(height: 12),
+              ElevatedButton(
+                onPressed: _loading ? null : _login,
+                child: Text(_loading ? 'Вход...' : 'Войти'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => RegisterScreen(auth: widget.auth)),
                 ),
+                child: const Text('Нет аккаунта? Регистрация'),
               ),
-            ),
-            const SizedBox(height: 12),
-            if (_error != null) Text(_error!, style: const TextStyle(color: Colors.red)),
-            const SizedBox(height: 12),
-            ElevatedButton(
-              onPressed: _loading ? null : _login,
-              child: Text(_loading ? 'Вход...' : 'Войти'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => RegisterScreen(auth: widget.auth)),
-              ),
-              child: const Text('Нет аккаунта? Регистрация'),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

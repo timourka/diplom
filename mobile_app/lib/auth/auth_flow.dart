@@ -21,8 +21,7 @@ class AuthFlow {
           builder: (_) => LoginScreen(
             auth: auth,
             after: after,
-            title: 'Сессия истекла',
-            message: 'Войди ещё раз, после этого действие продолжится.',
+            title: 'Авторизация',
           ),
         ),
       );
