@@ -7,6 +7,10 @@ import 'package:flutter/material.dart';
 import 'api/api_config.dart';
 import 'api/model_sync_service.dart';
 import 'auth/auth_state.dart';
+import 'models/stored_product.dart';
+import 'services/expiry_notification_service.dart';
+import 'services/local_storage_repository.dart';
+import 'services/offline_sync_service.dart';
 import 'screens/scan_screen.dart';
 
 List<CameraDescription> cameras = const [];
@@ -35,6 +39,19 @@ Future<void> main() async {
     await auth.load();
   } catch (e, st) {
     developer.log('Не удалось загрузить авторизацию: $e', name: 'Startup', error: e, stackTrace: st);
+  }
+
+  try {
+    final localStorage = LocalStoredProductRepository();
+    final cached = await localStorage.mergeCachedWithPending(await localStorage.readCachedStorage());
+    final items = cached
+        .whereType<Map>()
+        .map((x) => StoredProduct.fromJson(x.map((key, value) => MapEntry(key.toString(), value))))
+        .toList(growable: false);
+    await ExpiryNotificationService().notifyDueToday(items);
+    unawaited(OfflineSyncService().trySync(auth));
+  } catch (e, st) {
+    developer.log('Не удалось выполнить локальные уведомления/синхронизацию: $e', name: 'Startup', error: e, stackTrace: st);
   }
 
   // Не блокируем запуск приложения синхронизацией модели.

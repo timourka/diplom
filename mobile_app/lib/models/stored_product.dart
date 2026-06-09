@@ -7,6 +7,7 @@ class StoredProduct {
   final DateTime? expiryAt;
   final DateTime createdAt;
   final Product? product;
+  final bool isPendingLocal;
 
   StoredProduct({
     required this.id,
@@ -15,14 +16,28 @@ class StoredProduct {
     this.manufactureAt,
     this.expiryAt,
     this.product,
+    this.isPendingLocal = false,
   });
 
   factory StoredProduct.fromJson(Map<String, dynamic> json) => StoredProduct(
-        id: json['id'] as int,
-        productId: json['productId'] as int,
-        manufactureAt: json['manufactureAt'] == null ? null : DateTime.parse(json['manufactureAt']),
-        expiryAt: json['expiryAt'] == null ? null : DateTime.parse(json['expiryAt']),
-        createdAt: DateTime.parse(json['createdAt']),
-        product: json['product'] == null ? null : Product.fromJson(json['product']),
+        id: _asInt(json['id']) ?? _asInt(json['localId']) ?? 0,
+        productId: _asInt(json['productId']) ?? 0,
+        manufactureAt: _parseDate(json['manufactureAt']),
+        expiryAt: _parseDate(json['expiryAt']),
+        createdAt: _parseDate(json['createdAt']) ?? DateTime.now(),
+        product: json['product'] == null ? null : Product.fromJson(Map<String, dynamic>.from(json['product'] as Map)),
+        isPendingLocal: json['isPendingLocal'] == true,
       );
+
+  static int? _asInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '');
+  }
+
+  static DateTime? _parseDate(dynamic value) {
+    final s = value?.toString();
+    if (s == null || s.isEmpty) return null;
+    return DateTime.tryParse(s);
+  }
 }

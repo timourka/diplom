@@ -13,7 +13,9 @@ import '../ai/tflite_date_detector.dart';
 import '../api/model_sync_service.dart';
 import '../auth/auth_state.dart';
 import '../widgets/manual_add_sheet.dart';
+import '../services/offline_sync_service.dart';
 import 'cabinet_screen.dart';
+import 'community_leaderboard_screen.dart';
 import 'error_dataset_flow_screen.dart';
 import 'login_screen.dart';
 import 'settings_screen.dart';
@@ -40,6 +42,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   CameraDescription? _selectedCamera;
 
   final _modelSync = ModelSyncService();
+  final _offlineSync = OfflineSyncService();
   late final TfliteDateDetector _detector;
   late final DateReaderTflite _dateReader;
 
@@ -81,6 +84,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
       _aiStatus = widget.startupError!;
     }
     _initialize();
+    unawaited(_offlineSync.trySync(widget.auth));
   }
 
   Future<void> _refreshAiState() async {
@@ -1114,6 +1118,13 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     if (mounted) setState(() {});
   }
 
+  void _openLeaderboard() async {
+    await _closeMagnifierForNavigation();
+    await _pushWithScanPaused(
+      MaterialPageRoute(builder: (_) => const CommunityLeaderboardScreen()),
+    );
+  }
+
   void _openSettings() async {
     await _closeMagnifierForNavigation();
     await _pushWithScanPaused(
@@ -1286,6 +1297,16 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    CircleAvatar(
+                      radius: 20,
+                      child: IconButton(
+                        padding: EdgeInsets.zero,
+                        onPressed: _openLeaderboard,
+                        icon: const Icon(Icons.emoji_events, size: 20),
+                        tooltip: 'Вклад сообщества',
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                     CircleAvatar(
                       radius: 20,
                       child: IconButton(

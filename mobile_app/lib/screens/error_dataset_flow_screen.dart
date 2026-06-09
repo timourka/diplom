@@ -9,7 +9,9 @@ import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 
 import '../api/api_client.dart';
+import '../auth/auth_flow.dart';
 import '../auth/auth_state.dart';
+import '../services/pending_report_repository.dart';
 import '../storage/file_key_value_store.dart';
 
 class ErrorDatasetFlowScreen extends StatefulWidget {
@@ -56,6 +58,7 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
   final Map<int, Size> _frameSizes = {};
 
   final _comment = TextEditingController();
+  final _pendingReports = PendingReportRepository();
   String? _status;
 
   @override
@@ -495,8 +498,25 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
 
     try {
       final zipPath = await _zipDataset();
-      final api = ApiClient(token: widget.auth.token);
-      await api.uploadDatasetZip(zipPath, comment: _comment.text.trim());
+      final comment = _comment.text.trim();
+
+      try {
+        await AuthFlow.runWithReauth<void>(
+          context: context,
+          auth: widget.auth,
+          after: 'error',
+          action: () => ApiClient(token: widget.auth.token).uploadDatasetZip(zipPath, comment: comment),
+        );
+      } on NetworkApiException {
+        await _pendingReports.addPendingReport(zipPath: zipPath, comment: comment);
+        await _releaseCamera();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Интернета нет. Отчёт сохранён и отправится позже.')),
+        );
+        Navigator.of(context).pop();
+        return;
+      }
 
       await _releaseCamera();
       if (!mounted) return;
@@ -554,13 +574,7 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
             padding: const EdgeInsets.all(16),
             children: [
               if (!readyToAnnotate) ...[
-                AspectRatio(
-                  aspectRatio: controller!.value.aspectRatio,
-                  child: CameraPreview(
-                    controller,
-                    key: ValueKey('report-camera-${controller.hashCode}'),
-                  ),
-                ),
+                _ReportCameraPreview(controller: controller!),
                 const SizedBox(height: 12),
                 Row(
                   children: [
@@ -644,6 +658,46 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
             ],
           );
         },
+        ),
+      ),
+    );
+  }
+}
+
+
+class _ReportCameraPreview extends StatelessWidget {
+  final CameraController controller;
+
+  const _ReportCameraPreview({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    final previewSize = controller.value.previewSize;
+    if (previewSize == null) {
+      return const AspectRatio(
+        aspectRatio: 3 / 4,
+        child: ColoredBox(
+          color: Colors.black,
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
+
+    final childSize = Size(previewSize.height, previewSize.width);
+    return AspectRatio(
+      aspectRatio: childSize.width / childSize.height,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: FittedBox(
+          fit: BoxFit.cover,
+          child: SizedBox(
+            width: childSize.width,
+            height: childSize.height,
+            child: CameraPreview(
+              controller,
+              key: ValueKey('report-camera-${controller.hashCode}'),
+            ),
+          ),
         ),
       ),
     );

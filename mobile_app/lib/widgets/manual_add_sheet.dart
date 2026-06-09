@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../api/api_client.dart';
+import '../auth/auth_flow.dart';
 import '../auth/auth_state.dart';
+import '../services/local_storage_repository.dart';
 
 class ManualAddSheet extends StatefulWidget {
   final AuthState auth;
@@ -19,6 +21,7 @@ class ManualAddSheet extends StatefulWidget {
 
 class _ManualAddSheetState extends State<ManualAddSheet> {
   final _nameController = TextEditingController();
+  final _localStorage = LocalStoredProductRepository();
   DateTime? _expiry;
 
   String? _error;
@@ -38,13 +41,16 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
 
   DateTime _dateOnly(DateTime value) => DateTime(value.year, value.month, value.day);
 
+  bool get _isExpired {
+    final expiry = _expiry;
+    if (expiry == null) return false;
+    return _dateOnly(expiry.toLocal()).isBefore(_dateOnly(DateTime.now()));
+  }
+
   Future<void> _pickDate() async {
     final today = _dateOnly(DateTime.now());
     final initial = _dateOnly(_expiry ?? today.add(const Duration(days: 7)));
 
-    // showDatePicker падает, если initialDate раньше firstDate.
-    // OCR может распознать уже прошедшую дату, поэтому календарь должен уметь
-    // открываться и для таких значений, чтобы пользователь мог исправить дату.
     final firstDate = DateTime(2000, 1, 1);
     final defaultLastDate = today.add(const Duration(days: 3650));
     final lastDate = initial.isAfter(defaultLastDate) ? initial : defaultLastDate;
@@ -77,10 +83,24 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     });
 
     try {
-      final api = ApiClient(token: widget.auth.token);
-      await api.addStoredProductByName(productName, _expiry!);
+      await AuthFlow.runWithReauth<void>(
+        context: context,
+        auth: widget.auth,
+        after: 'manual',
+        action: () async {
+          final api = ApiClient(token: widget.auth.token);
+          await api.addStoredProductByName(productName, _expiry!);
+        },
+      );
       if (!mounted) return;
       Navigator.pop(context, true);
+    } on NetworkApiException {
+      await _localStorage.addPendingProduct(productName, _expiry!);
+      if (!mounted) return;
+      Navigator.pop(context, true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Интернета нет. Продукт сохранён локально и отправится позже.')),
+      );
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
     } finally {
@@ -91,6 +111,9 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
   @override
   Widget build(BuildContext context) {
     final pad = MediaQuery.of(context).viewInsets.bottom;
+    final dateText = _expiry == null
+        ? 'Выбрать срок годности'
+        : 'Срок годности: ${_expiry!.toLocal().toString().split(' ').first}';
 
     return Padding(
       padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + pad),
@@ -101,7 +124,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
           children: [
             const Text(
               'Добавить продукт',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
             if (_error != null) ...[
@@ -119,14 +142,27 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
             ),
             const SizedBox(height: 12),
             OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+                backgroundColor: _isExpired ? Colors.red.withOpacity(0.08) : null,
+                foregroundColor: _isExpired ? Colors.red.shade900 : null,
+                side: _isExpired ? BorderSide(color: Colors.red.shade300) : null,
+              ),
               onPressed: _saving ? null : _pickDate,
-              icon: const Icon(Icons.calendar_month),
+              icon: const Icon(Icons.calendar_month, size: 28),
               label: Text(
-                _expiry == null
-                    ? 'Выбрать срок годности'
-                    : 'Срок годности: ${_expiry!.toLocal().toString().split(' ').first}',
+                dateText,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
               ),
             ),
+            if (_isExpired) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Эта дата уже прошла. Проверь срок годности перед сохранением.',
+                style: TextStyle(color: Colors.red.shade800),
+              ),
+            ],
             const SizedBox(height: 12),
             ElevatedButton.icon(
               onPressed: _saving ? null : _save,

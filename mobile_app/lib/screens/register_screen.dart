@@ -11,7 +11,7 @@ class RegisterScreen extends StatefulWidget {
 }
 
 class _RegisterScreenState extends State<RegisterScreen> {
-  final _email = TextEditingController();
+  final _login = TextEditingController();
   final _pass = TextEditingController();
 
   String? _error;
@@ -25,10 +25,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     try {
       final api = ApiClient(token: null);
-      final token = await api.register(_email.text, _pass.text);
-      await widget.auth.setToken(token);
+      final login = _login.text.trim();
+      final token = await api.register(login, _pass.text);
+      await widget.auth.setToken(token, login: login);
 
-      if (mounted) Navigator.pop(context);
+      if (mounted) Navigator.pop(context, true);
     } catch (e) {
       setState(() => _error = e.toString());
     } finally {
@@ -38,7 +39,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   void dispose() {
-    _email.dispose();
+    _login.dispose();
     _pass.dispose();
     super.dispose();
   }
@@ -52,9 +53,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
         child: Column(
           children: [
             TextField(
-              controller: _email,
-              decoration: const InputDecoration(labelText: 'Email'),
-              keyboardType: TextInputType.emailAddress,
+              controller: _login,
+              decoration: const InputDecoration(labelText: 'Логин'),
+              keyboardType: TextInputType.text,
             ),
             TextField(
               controller: _pass,

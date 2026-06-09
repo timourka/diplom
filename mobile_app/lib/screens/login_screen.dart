@@ -8,7 +8,15 @@ import 'settings_screen.dart';
 class LoginScreen extends StatefulWidget {
   final AuthState auth;
   final String after;
-  const LoginScreen({super.key, required this.auth, required this.after});
+  final String title;
+  final String? message;
+  const LoginScreen({
+    super.key,
+    required this.auth,
+    required this.after,
+    this.title = 'Авторизация',
+    this.message,
+  });
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -37,10 +45,11 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       final api = ApiClient(token: null);
-      final token = await api.login(_email.text, _pass.text);
-      await widget.auth.setToken(token);
+      final login = _email.text.trim();
+      final token = await api.login(login, _pass.text);
+      await widget.auth.setToken(token, login: login);
 
-      if (mounted) Navigator.pop(context);
+      if (mounted) Navigator.pop(context, true);
     } catch (e) {
       setState(() => _error = e.toString());
     } finally {
@@ -59,7 +68,7 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Авторизация'),
+        title: Text(widget.title),
         actions: [
           IconButton(
             onPressed: _openSettings,
@@ -72,10 +81,19 @@ class _LoginScreenState extends State<LoginScreen> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
+            if (widget.message != null && widget.message!.isNotEmpty) ...[
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Text(widget.message!),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             TextField(
               controller: _email,
-              decoration: const InputDecoration(labelText: 'Email'),
-              keyboardType: TextInputType.emailAddress,
+              decoration: const InputDecoration(labelText: 'Логин'),
+              keyboardType: TextInputType.text,
             ),
             TextField(
               controller: _pass,
