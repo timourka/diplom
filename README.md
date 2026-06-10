@@ -28,3 +28,6 @@
 $env:PRODUCTS_DATE_BACKEND_URL="http://111.88.146.2:5099"
 $env:TRAINING_CLIENT_ID="DESKTOP-P2RNMN9"
 $env:TRAINING_CLIENT_API_KEY="super_secret_training_key_2026"
+$env:YOLO_WORKERS="4"
+$env:PIN_MEMORY="false"
+python app.py worker
