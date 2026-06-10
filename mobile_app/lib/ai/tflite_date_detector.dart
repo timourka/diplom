@@ -120,7 +120,11 @@ class TfliteDateDetector {
     workerSendPort.send({
       'type': 'init',
       'modelPath': modelPath,
-      'threads': 2,
+      // Для LeEco Le X257 пробуем сначала GPU (Adreno), затем быстрый CPU XNNPACK,
+      // затем NNAPI и обычный CPU. Если делегат не поддерживается устройством или моделью,
+      // worker сам откатится на следующий вариант и приложение не упадёт.
+      'threads': 4,
+      'accelerators': const ['gpu', 'xnnpack', 'nnapi', 'cpu'],
     });
 
     try {
@@ -246,6 +250,8 @@ void _detectorWorkerEntry(SendPort mainSendPort) async {
   mainSendPort.send({'type': 'ready', 'sendPort': port.sendPort});
 
   Interpreter? interpreter;
+  Delegate? activeDelegate;
+  String activeAccelerator = 'cpu';
   TensorType inputType = TensorType.float32;
   TensorType outputType = TensorType.float32;
   int inputSize = 640;
@@ -259,22 +265,37 @@ void _detectorWorkerEntry(SendPort mainSendPort) async {
     final type = message['type'];
 
     if (type == 'dispose') {
-      interpreter?.close();
+      _disposeInterpreter(interpreter, activeDelegate);
+      interpreter = null;
+      activeDelegate = null;
       port.close();
       break;
     }
 
     if (type == 'init') {
       try {
-        interpreter?.close();
+        _disposeInterpreter(interpreter, activeDelegate);
+        interpreter = null;
+        activeDelegate = null;
+        activeAccelerator = 'cpu';
+
         final modelPath = message['modelPath']?.toString();
         if (modelPath == null || modelPath.isEmpty) {
           throw StateError('Путь к модели не передан.');
         }
 
-        final options = InterpreterOptions()..threads = (message['threads'] as int?) ?? 2;
-        final created = Interpreter.fromFile(File(modelPath), options: options);
-        created.allocateTensors();
+        final threads = (message['threads'] as int?) ?? 4;
+        final accelerators = ((message['accelerators'] as List?) ?? const ['gpu', 'xnnpack', 'nnapi', 'cpu'])
+            .map((value) => value.toString())
+            .toList(growable: false);
+        final initResult = _createInterpreterWithFallback(
+          modelPath: modelPath,
+          threads: threads,
+          accelerators: accelerators,
+        );
+        final created = initResult.interpreter;
+        activeDelegate = initResult.delegate;
+        activeAccelerator = initResult.accelerator;
 
         final inputTensor = created.getInputTensor(0);
         final outputTensor = created.getOutputTensor(0);
@@ -292,7 +313,7 @@ void _detectorWorkerEntry(SendPort mainSendPort) async {
         outputZeroPoint = outputParams.zeroPoint;
 
         developer.log(
-          'TFLite model loaded. '
+          'TFLite model loaded with $activeAccelerator accelerator. '
           'inputShape=${inputTensor.shape}, inputType=$inputType, '
           'inputScale=$inputScale, inputZeroPoint=$inputZeroPoint; '
           'outputShape=${outputTensor.shape}, outputType=$outputType, '
@@ -552,6 +573,115 @@ void _detectorWorkerEntry(SendPort mainSendPort) async {
     }
     }
   }
+
+
+class _InterpreterInitResult {
+  final Interpreter interpreter;
+  final Delegate? delegate;
+  final String accelerator;
+
+  const _InterpreterInitResult({
+    required this.interpreter,
+    required this.delegate,
+    required this.accelerator,
+  });
+}
+
+_InterpreterInitResult _createInterpreterWithFallback({
+  required String modelPath,
+  required int threads,
+  required List<String> accelerators,
+}) {
+  final candidates = <String>[
+    ...accelerators,
+    if (!accelerators.contains('cpu')) 'cpu',
+  ];
+  final errors = <String>[];
+
+  for (final rawName in candidates) {
+    final name = rawName.toLowerCase().trim();
+    if (name.isEmpty) continue;
+
+    Delegate? delegate;
+    InterpreterOptions? options;
+    try {
+      options = InterpreterOptions()..threads = threads;
+
+      switch (name) {
+        case 'gpu':
+          if (!Platform.isAndroid) {
+            throw UnsupportedError('GPU delegate включается только на Android.');
+          }
+          delegate = GpuDelegateV2(
+            options: GpuDelegateOptionsV2(
+              // На старом Adreno это обычно быстрее, чем максимальная точность FP32.
+              isPrecisionLossAllowed: true,
+            ),
+          );
+          options.addDelegate(delegate);
+          break;
+        case 'xnnpack':
+          delegate = XNNPackDelegate(
+            options: XNNPackDelegateOptions(numThreads: math.max(1, threads)),
+          );
+          options.addDelegate(delegate);
+          break;
+        case 'nnapi':
+          if (!Platform.isAndroid) {
+            throw UnsupportedError('NNAPI доступен только на Android.');
+          }
+          options.useNnApiForAndroid = true;
+          break;
+        case 'cpu':
+          break;
+        default:
+          throw UnsupportedError('Неизвестный ускоритель TFLite: $rawName');
+      }
+
+      final created = Interpreter.fromFile(File(modelPath), options: options);
+      created.allocateTensors();
+      developer.log('TFLite accelerator selected: $name', name: 'AI');
+      return _InterpreterInitResult(
+        interpreter: created,
+        delegate: delegate,
+        accelerator: name,
+      );
+    } catch (e, st) {
+      errors.add('$name: $e');
+      developer.log(
+        'TFLite accelerator $name is unavailable, trying fallback.',
+        name: 'AI',
+        error: e,
+        stackTrace: st,
+      );
+      try {
+        delegate?.delete();
+      } catch (_) {
+        // ignore
+      }
+      try {
+        options?.delete();
+      } catch (_) {
+        // ignore
+      }
+    }
+  }
+
+  throw StateError('Не удалось создать TFLite interpreter. Ошибки: ${errors.join(' | ')}');
+}
+
+void _disposeInterpreter(Interpreter? interpreter, Delegate? delegate) {
+  try {
+    interpreter?.close();
+  } catch (_) {
+    // ignore
+  }
+  try {
+    delegate?.delete();
+  } catch (_) {
+    // ignore
+  }
+}
 
 class _WorkerCameraImage {
   final int width;

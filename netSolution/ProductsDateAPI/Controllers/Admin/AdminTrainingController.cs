@@ -1,4 +1,4 @@
-﻿using Contracts.Dtos;
+using Contracts.Dtos;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -14,16 +14,16 @@ namespace ProductsDateAPI.Controllers.Admin;
 public class AdminTrainingController : ControllerBase
 {
     private readonly AppDbContext _db;
-    private readonly TrainingDatasetPackager _packager;
+    private readonly ITrainingJobPreparationQueue _preparationQueue;
     private readonly TrainingFileStorage _storage;
 
     public AdminTrainingController(
         AppDbContext db,
-        TrainingDatasetPackager packager,
+        ITrainingJobPreparationQueue preparationQueue,
         TrainingFileStorage storage)
     {
         _db = db;
-        _packager = packager;
+        _preparationQueue = preparationQueue;
         _storage = storage;
     }
 
@@ -32,56 +32,35 @@ public class AdminTrainingController : ControllerBase
         [FromBody] StartTrainingRequest? request,
         CancellationToken ct)
     {
-        TrainingDatasetPackage? package = null;
-        var jobId = Guid.NewGuid().ToString("N");
-
-        try
+        var job = new TrainingJob
         {
-            package = await _packager.CreateApprovedReportsZipAsync(ct);
-            var datasetZipPath = _storage.SaveDatasetZip(jobId, package.ZipPath);
+            JobId = Guid.NewGuid().ToString("N"),
+            Status = "preparing",
+            Message = "Задача создана. Датасет готовится на сервере.",
+            CreatedAt = DateTime.UtcNow,
+            ImagesCount = 0,
+            DatasetZipPath = string.Empty,
+            BaseModel = string.IsNullOrWhiteSpace(request?.BaseModel) ? "yolov8n.pt" : request!.BaseModel,
+            Epochs = request?.Epochs ?? 50,
+            ImgSize = request?.ImgSize ?? 640,
+            Batch = request?.Batch ?? 16,
+            Device = string.IsNullOrWhiteSpace(request?.Device) ? "auto" : request!.Device,
+            ExportInt8 = request?.ExportInt8 ?? true,
+            ExportNms = request?.ExportNms ?? true,
+            MobileFormat = string.IsNullOrWhiteSpace(request?.MobileFormat) ? "tflite" : request!.MobileFormat,
+            QuantizationFraction = request?.QuantizationFraction ?? 0.3,
+        };
 
-            var job = new TrainingJob
-            {
-                JobId = jobId,
-                Status = "queued",
-                Message = $"Задача создана на сервере. Python-клиент заберёт её при следующем опросе. В датасете {package.ImagesCount} кадров.",
-                CreatedAt = DateTime.UtcNow,
-                ImagesCount = package.ImagesCount,
-                DatasetZipPath = datasetZipPath,
-                BaseModel = string.IsNullOrWhiteSpace(request?.BaseModel) ? "yolov8n.pt" : request!.BaseModel,
-                Epochs = request?.Epochs ?? 50,
-                ImgSize = request?.ImgSize ?? 640,
-                Batch = request?.Batch ?? 16,
-                Device = string.IsNullOrWhiteSpace(request?.Device) ? "auto" : request!.Device,
-                ExportInt8 = request?.ExportInt8 ?? true,
-                ExportNms = request?.ExportNms ?? true,
-                MobileFormat = string.IsNullOrWhiteSpace(request?.MobileFormat) ? "tflite" : request!.MobileFormat,
-                QuantizationFraction = request?.QuantizationFraction ?? 0.3,
-            };
+        _db.TrainingJobs.Add(job);
+        await _db.SaveChangesAsync(ct);
 
-            _db.TrainingJobs.Add(job);
-            await _db.SaveChangesAsync(ct);
+        _preparationQueue.Enqueue(job.JobId);
 
-            return Ok(new TrainingJobStartResponse(
-                job.JobId,
-                job.Status,
-                job.ImagesCount,
-                job.Message ?? "Задача обучения создана."));
-        }
-        finally
-        {
-            if (package is not null && Directory.Exists(package.WorkingDirectory))
-            {
-                try
-                {
-                    Directory.Delete(package.WorkingDirectory, recursive: true);
-                }
-                catch
-                {
-                    // temp cleanup best effort
-                }
-            }
-        }
+        return Ok(new TrainingJobStartResponse(
+            job.JobId,
+            job.Status,
+            job.ImagesCount,
+            job.Message));
     }
 
     [HttpGet("jobs")]
@@ -115,7 +94,8 @@ public class AdminTrainingController : ControllerBase
         job.CancellationRequested = true;
         job.Message = "Администратор запросил остановку задачи. Если задача ещё не началась, она будет отменена сразу; если уже идёт обучение, Python-клиент увидит запрос при следующей синхронизации.";
 
-        if (string.Equals(job.Status, "queued", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(job.Status, "queued", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(job.Status, "preparing", StringComparison.OrdinalIgnoreCase))
         {
             job.Status = "canceled";
             job.FinishedAt = DateTime.UtcNow;

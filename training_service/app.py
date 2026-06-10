@@ -41,6 +41,7 @@ class TrainConfig:
     export_nms: bool = True
     mobile_format: str = "tflite"
     quantization_fraction: float = 0.3
+    workers: int = 0
 
     @staticmethod
     def from_job(job: dict[str, Any]) -> "TrainConfig":
@@ -54,6 +55,7 @@ class TrainConfig:
             export_nms=bool(job.get("exportNms", True)),
             mobile_format=job.get("mobileFormat") or "tflite",
             quantization_fraction=float(job.get("quantizationFraction") or 0.3),
+            workers=int(job.get("workers") or os.getenv("YOLO_WORKERS", "0")),
         )
 
 
@@ -145,7 +147,7 @@ def run_training_job(session: requests.Session, job: dict[str, Any], work_dir: P
         session,
         job_id,
         "running",
-        f"Обучение запущено. requested device={config.device}, effective device={resolved_device or 'ultralytics-auto'}, images={images_count}.",
+        f"Обучение запущено. requested device={config.device}, effective device={resolved_device or 'ultralytics-auto'}, images={images_count}, workers={config.workers}.",
     )
 
     model = YOLO(config.base_model)
@@ -157,6 +159,10 @@ def run_training_job(session: requests.Session, job: dict[str, Any], work_dir: P
         "project": str(runs_dir),
         "name": "expiry_all",
         "exist_ok": True,
+        # On Windows/CUDA, Ultralytics + PyTorch may crash in the DataLoader pin-memory
+        # thread with: CUDA error: resource already mapped. Using 0 workers avoids the
+        # extra pin-memory thread and is more stable for the local training client.
+        "workers": config.workers,
     }
     if resolved_device is not None:
         train_kwargs["device"] = resolved_device
@@ -173,7 +179,7 @@ def run_training_job(session: requests.Session, job: dict[str, Any], work_dir: P
     shutil.copy2(best_pt, best_artifact)
 
     trained = YOLO(str(best_pt))
-    val_kwargs: dict[str, Any] = {"data": str(data_yaml), "imgsz": config.imgsz, "batch": 1}
+    val_kwargs: dict[str, Any] = {"data": str(data_yaml), "imgsz": config.imgsz, "batch": 1, "workers": config.workers}
     if resolved_device is not None:
         val_kwargs["device"] = resolved_device
     metrics = trained.val(**val_kwargs)

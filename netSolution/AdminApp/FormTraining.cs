@@ -31,6 +31,12 @@ public class FormTraining : Form
         RowHeadersVisible = false,
     };
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 4000 };
+    private readonly CancellationTokenSource _lifetimeCts = new();
+    private bool _isClosing;
+    private bool _isRefreshing;
+    private bool _isLoadingSelectedJob;
+
+    private bool CanTouchUi => !_isClosing && !Disposing && !IsDisposed && IsHandleCreated;
 
     public FormTraining(AdminApiClient api)
     {
@@ -51,6 +57,12 @@ public class FormTraining : Form
         _gridJobs.CellDoubleClick += async (_, _) => await OpenDetailsAsync();
         _timer.Tick += async (_, _) => await RefreshJobsAsync(silent: true);
         Shown += async (_, _) => await RefreshJobsAsync();
+        FormClosing += (_, _) =>
+        {
+            _isClosing = true;
+            _timer.Stop();
+            _lifetimeCts.Cancel();
+        };
         FormClosed += (_, _) => _timer.Stop();
     }
 
@@ -146,7 +158,7 @@ public class FormTraining : Form
         try
         {
             ToggleBusy(true);
-            AppendStatus("Создаю задачу обучения на backend. Python-клиент заберёт её исходящим запросом...");
+            AppendStatus("Создаю задачу обучения на backend...");
 
             var response = await _api.StartTrainingAsync(new StartTrainingRequest(
                 _txtBaseModel.Text.Trim(),
@@ -158,29 +170,51 @@ public class FormTraining : Form
                 _chkNms.Checked,
                 "tflite",
                 0.3
-            ));
+            ), _lifetimeCts.Token);
+
+            if (!CanTouchUi)
+                return;
 
             _txtJobId.Text = response.JobId;
             AppendStatus($"Job {response.JobId}: {TranslateStatus(response.Status)}. {response.Message}");
             await RefreshJobsAsync(selectJobId: response.JobId);
-            _timer.Start();
+
+            if (CanTouchUi)
+                _timer.Start();
+        }
+        catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested)
+        {
+            // Форма закрывается: не показываем ошибку и не трогаем уже уничтоженные контролы.
+        }
+        catch (ObjectDisposedException) when (!CanTouchUi)
+        {
+            // Асинхронный запрос завершился уже после закрытия окна. Это не ошибка пользователя.
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Ошибка обучения", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ShowErrorSafe(ex.Message, "Ошибка обучения");
             AppendStatus("Ошибка: " + ex.Message);
         }
         finally
         {
-            ToggleBusy(false);
+            if (CanTouchUi)
+                ToggleBusy(false);
         }
     }
 
     private async Task RefreshJobsAsync(bool silent = false, string? selectJobId = null)
     {
+        if (!CanTouchUi || _isRefreshing)
+            return;
+
+        _isRefreshing = true;
         try
         {
-            var jobs = await _api.GetTrainingJobsAsync();
+            var jobs = await _api.GetTrainingJobsAsync(_lifetimeCts.Token);
+
+            if (!CanTouchUi)
+                return;
+
             var selectedJobId = selectJobId ?? GetSelectedJobId() ?? _txtJobId.Text.Trim();
 
             _gridJobs.DataSource = jobs
@@ -205,15 +239,30 @@ public class FormTraining : Form
             if (!silent)
                 AppendStatus($"Список задач обучения обновлён. Всего: {jobs.Count}.");
         }
+        catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested)
+        {
+            // Окно закрывается.
+        }
+        catch (ObjectDisposedException) when (!CanTouchUi)
+        {
+            // Асинхронное обновление завершилось после закрытия окна.
+        }
         catch (Exception ex)
         {
             if (!silent)
                 AppendStatus("Ошибка обновления списка: " + ex.Message);
         }
+        finally
+        {
+            _isRefreshing = false;
+        }
     }
 
     private async Task ShowSelectedJobAsync()
     {
+        if (!CanTouchUi || _isLoadingSelectedJob)
+            return;
+
         var selected = GetSelectedJob();
         UpdateButtonsState();
         if (selected is null)
@@ -221,9 +270,14 @@ public class FormTraining : Form
 
         _txtJobId.Text = selected.JobId;
 
+        _isLoadingSelectedJob = true;
         try
         {
-            var job = await _api.GetTrainingJobAsync(selected.JobId);
+            var job = await _api.GetTrainingJobAsync(selected.JobId, _lifetimeCts.Token);
+
+            if (!CanTouchUi)
+                return;
+
             if (job is null)
             {
                 _txtStatus.Text = "Задача не найдена на backend.";
@@ -261,9 +315,22 @@ public class FormTraining : Form
                     _timer.Stop();
             }
         }
+        catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested)
+        {
+            // Окно закрывается.
+        }
+        catch (ObjectDisposedException) when (!CanTouchUi)
+        {
+            // Асинхронная загрузка завершилась после закрытия окна.
+        }
         catch (Exception ex)
         {
-            _txtStatus.Text = "Ошибка получения задачи: " + ex.Message;
+            if (CanTouchUi)
+                _txtStatus.Text = "Ошибка получения задачи: " + ex.Message;
+        }
+        finally
+        {
+            _isLoadingSelectedJob = false;
         }
     }
 
@@ -278,7 +345,9 @@ public class FormTraining : Form
 
         using var dialog = new FormTrainingJobDetails(_api, selected.JobId);
         dialog.ShowDialog(this);
-        await RefreshJobsAsync(selectJobId: selected.JobId);
+
+        if (CanTouchUi)
+            await RefreshJobsAsync(selectJobId: selected.JobId);
     }
 
     private async Task CancelSelectedJobAsync()
@@ -309,18 +378,30 @@ public class FormTraining : Form
         try
         {
             ToggleBusy(true);
-            var response = await _api.CancelTrainingJobAsync(selected.JobId);
+            var response = await _api.CancelTrainingJobAsync(selected.JobId, _lifetimeCts.Token);
+
+            if (!CanTouchUi)
+                return;
             AppendStatus($"Задача {selected.JobId}: {TranslateStatus(response.Status)}. {response.Message}");
             await RefreshJobsAsync(selectJobId: selected.JobId);
         }
+        catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested)
+        {
+            // Окно закрывается.
+        }
+        catch (ObjectDisposedException) when (!CanTouchUi)
+        {
+            // Асинхронный запрос завершился после закрытия окна.
+        }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Ошибка остановки", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ShowErrorSafe(ex.Message, "Ошибка остановки");
             AppendStatus("Ошибка остановки задачи: " + ex.Message);
         }
         finally
         {
-            ToggleBusy(false);
+            if (CanTouchUi)
+                ToggleBusy(false);
         }
     }
 
@@ -359,12 +440,14 @@ public class FormTraining : Form
            || string.Equals(status, "canceled", StringComparison.OrdinalIgnoreCase);
 
     private static bool CanBeCanceled(string? status)
-        => string.Equals(status, "queued", StringComparison.OrdinalIgnoreCase)
+        => string.Equals(status, "preparing", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(status, "queued", StringComparison.OrdinalIgnoreCase)
            || string.Equals(status, "running", StringComparison.OrdinalIgnoreCase);
 
     private static string TranslateStatus(string? status)
         => status?.ToLowerInvariant() switch
         {
+            "preparing" => "Подготовка датасета",
             "queued" => "В очереди",
             "running" => "Выполняется",
             "completed" => "Завершена успешно",
@@ -423,13 +506,55 @@ public class FormTraining : Form
         }
     }
 
+    private void ShowErrorSafe(string message, string title)
+    {
+        if (!CanTouchUi)
+            return;
+
+        try
+        {
+            MessageBox.Show(this, message, title, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Окно уже закрыто.
+        }
+    }
+
     private void AppendStatus(string text)
     {
-        _txtStatus.AppendText(text + Environment.NewLine);
+        if (!CanTouchUi)
+            return;
+
+        if (InvokeRequired)
+        {
+            try
+            {
+                BeginInvoke(new Action(() => AppendStatus(text)));
+            }
+            catch
+            {
+                // Окно закрывается.
+            }
+
+            return;
+        }
+
+        try
+        {
+            _txtStatus.AppendText(text + Environment.NewLine);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Окно уже закрыто.
+        }
     }
 
     private void ToggleBusy(bool busy)
     {
+        if (!CanTouchUi)
+            return;
+
         UseWaitCursor = busy;
         _btnStart.Enabled = !busy;
         _btnRefresh.Enabled = !busy;

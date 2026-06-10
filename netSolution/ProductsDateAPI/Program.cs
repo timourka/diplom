@@ -27,9 +27,9 @@ builder.Services.AddScoped<StoredProductRepository>();
 builder.Services.Configure<TrainingServiceOptions>(builder.Configuration.GetSection("TrainingService"));
 builder.Services.AddScoped<TrainingDatasetPackager>();
 builder.Services.AddScoped<TrainingFileStorage>();
+builder.Services.AddSingleton<ITrainingJobPreparationQueue, TrainingJobPreparationQueue>();
+builder.Services.AddHostedService<TrainingJobPreparationWorker>();
 builder.Services.AddScoped<BackupService>();
-builder.Services.Configure<AdminSeedOptions>(builder.Configuration.GetSection("AdminSeed"));
-builder.Services.AddScoped<AdminAccountSeeder>();
 
 // JWT
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
@@ -51,8 +51,7 @@ builder.Services
             ValidateIssuerSigningKey = true,
             IssuerSigningKey = key,
             ValidateLifetime = true,
-            ClockSkew = TimeSpan.FromSeconds(30),
-            RoleClaimType = System.Security.Claims.ClaimTypes.Role
+            ClockSkew = TimeSpan.FromSeconds(30)
         };
     });
 
@@ -70,17 +69,11 @@ builder.Services.AddCors(opt =>
 
 var app = builder.Build();
 
-using (var scope = app.Services.CreateScope())
+if (app.Configuration.GetValue<bool>("Database:ApplyMigrations"))
 {
+    using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-    if (app.Configuration.GetValue<bool>("Database:ApplyMigrations"))
-    {
-        db.Database.Migrate();
-    }
-
-    var adminSeeder = scope.ServiceProvider.GetRequiredService<AdminAccountSeeder>();
-    await adminSeeder.SeedAsync();
+    db.Database.Migrate();
 }
 
 if (app.Environment.IsDevelopment() || app.Configuration.GetValue<bool>("Swagger:Enabled"))
