@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../api/api_client.dart';
@@ -55,13 +56,81 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     final defaultLastDate = today.add(const Duration(days: 3650));
     final lastDate = initial.isAfter(defaultLastDate) ? initial : defaultLastDate;
 
-    final picked = await showDatePicker(
+    DateTime selected = initial;
+
+    final picked = await showModalBottomSheet<DateTime>(
       context: context,
-      firstDate: firstDate,
-      lastDate: lastDate,
-      initialDate: initial,
+      useRootNavigator: true,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: SizedBox(
+            height: 390,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+                  child: Row(
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(sheetContext),
+                        child: const Text(
+                          'Отмена',
+                          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      const Spacer(),
+                      const Text(
+                        'Срок годности',
+                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+                      ),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () => Navigator.pop(sheetContext, selected),
+                        child: const Text(
+                          'Готово',
+                          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                Expanded(
+                  child: CupertinoTheme(
+                    data: const CupertinoThemeData(
+                      textTheme: CupertinoTextThemeData(
+                        dateTimePickerTextStyle: TextStyle(
+                          fontSize: 30,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.black,
+                        ),
+                      ),
+                    ),
+                    child: CupertinoDatePicker(
+                      mode: CupertinoDatePickerMode.date,
+                      dateOrder: DatePickerDateOrder.dmy,
+                      initialDateTime: initial,
+                      minimumDate: firstDate,
+                      maximumDate: lastDate,
+                      minimumYear: firstDate.year,
+                      maximumYear: lastDate.year,
+                      itemExtent: 52,
+                      onDateTimeChanged: (value) {
+                        selected = _dateOnly(value);
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
-    if (picked != null) setState(() => _expiry = picked);
+
+    if (picked != null) setState(() => _expiry = _dateOnly(picked));
   }
 
   Future<void> _save() async {
