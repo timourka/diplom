@@ -91,15 +91,19 @@ public class AdminTrainingController : ControllerBase
         if (IsTerminal(job.Status))
             return Ok(ToJobStatusResponse(job));
 
-        job.CancellationRequested = true;
-        job.Message = "Администратор запросил остановку задачи. Если задача ещё не началась, она будет отменена сразу; если уже идёт обучение, Python-клиент увидит запрос при следующей синхронизации.";
+        var oldStatus = job.Status;
 
-        if (string.Equals(job.Status, "queued", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(job.Status, "preparing", StringComparison.OrdinalIgnoreCase))
+        job.CancellationRequested = true;
+        job.Status = "canceled";
+        job.FinishedAt = DateTime.UtcNow;
+
+        if (string.Equals(oldStatus, "running", StringComparison.OrdinalIgnoreCase))
         {
-            job.Status = "canceled";
-            job.FinishedAt = DateTime.UtcNow;
-            job.Message = "Задача отменена администратором до старта обучения.";
+            job.Message = "Задача остановлена администратором. Если обучающий сервис был завершён вручную, задача больше не будет висеть как выполняющаяся.";
+        }
+        else
+        {
+            job.Message = "Задача остановлена администратором.";
         }
 
         await _db.SaveChangesAsync(ct);

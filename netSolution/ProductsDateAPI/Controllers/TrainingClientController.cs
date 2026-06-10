@@ -120,7 +120,22 @@ public class TrainingClientController : ControllerBase
         if (job is null)
             return NotFound();
 
+        if (IsTerminal(job.Status))
+        {
+            return Ok(new TrainingClientStatusResponse(job.JobId, job.Status, job.CancellationRequested, job.Message));
+        }
+
         job.HeartbeatAt = DateTime.UtcNow;
+
+        if (job.CancellationRequested)
+        {
+            job.Status = "canceled";
+            job.FinishedAt = DateTime.UtcNow;
+            job.Message = "Задача остановлена администратором.";
+
+            await _db.SaveChangesAsync(ct);
+            return Ok(new TrainingClientStatusResponse(job.JobId, job.Status, job.CancellationRequested, job.Message));
+        }
 
         if (!string.IsNullOrWhiteSpace(request.Status))
         {
@@ -161,6 +176,9 @@ public class TrainingClientController : ControllerBase
         var job = await _db.TrainingJobs.FirstOrDefaultAsync(x => x.JobId == jobId, ct);
         if (job is null)
             return NotFound();
+
+        if (job.CancellationRequested || IsTerminal(job.Status))
+            return Conflict("Training job is canceled or already finished.");
 
         var bestPath = form.BestWeights is not null && form.BestWeights.Length > 0
             ? await _storage.SaveArtifactAsync(jobId, form.BestWeights, form.BestWeights.FileName, ct)
@@ -207,4 +225,9 @@ public class TrainingClientController : ControllerBase
 
     private bool IsAuthorized(string? apiKey)
         => string.IsNullOrWhiteSpace(_options.ApiKey) || apiKey == _options.ApiKey;
+
+    private static bool IsTerminal(string? status)
+        => string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(status, "canceled", StringComparison.OrdinalIgnoreCase);
 }
