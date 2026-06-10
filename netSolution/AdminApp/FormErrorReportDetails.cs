@@ -171,8 +171,15 @@ public partial class FormErrorReportDetails : Form
                 return;
             }
 
-            if (_currentFrameIndex < 1) _currentFrameIndex = 1;
-            if (_currentFrameIndex > _report.FramesCount) _currentFrameIndex = _report.FramesCount;
+            if (_report.FramesCount <= 0)
+            {
+                _currentFrameIndex = 0;
+            }
+            else
+            {
+                if (_currentFrameIndex < 1) _currentFrameIndex = 1;
+                if (_currentFrameIndex > _report.FramesCount) _currentFrameIndex = _report.FramesCount;
+            }
 
             _lblInfo.Text =
                 $"ReportId: {_report.Id}\r\n" +
@@ -199,6 +206,18 @@ public partial class FormErrorReportDetails : Form
     {
         if (_report == null) return;
 
+        if (_report.FramesCount <= 0)
+        {
+            _currentImage?.Dispose();
+            _currentImage = null;
+            _currentBboxes = new List<YoloBboxDto>();
+            _pictureBox.Image = null;
+            _lblFrameNumber.Text = "Нет кадров для просмотра";
+            UpdateNavigationButtons();
+            _pictureBox.Invalidate();
+            return;
+        }
+
         try
         {
             UseWaitCursor = true;
@@ -209,6 +228,7 @@ public partial class FormErrorReportDetails : Form
 
             _pictureBox.Image = _currentImage;
             _lblFrameNumber.Text = $"Кадр {_currentFrameIndex} / {_report.FramesCount}";
+            UpdateNavigationButtons();
             _pictureBox.Invalidate();
         }
         catch (Exception ex)
@@ -219,6 +239,13 @@ public partial class FormErrorReportDetails : Form
         {
             UseWaitCursor = false;
         }
+    }
+
+    private void UpdateNavigationButtons()
+    {
+        var hasFrames = _report is not null && _report.FramesCount > 0;
+        _btnPrev.Enabled = hasFrames && _currentFrameIndex > 1;
+        _btnNext.Enabled = hasFrames && _report is not null && _currentFrameIndex < _report.FramesCount;
     }
 
     private async Task ToggleApproveAsync()
@@ -289,7 +316,23 @@ public partial class FormErrorReportDetails : Form
 
     private void PictureBox_Paint(object? sender, PaintEventArgs e)
     {
-        if (_pictureBox.Image == null || _currentBboxes.Count == 0)
+        if (_pictureBox.Image == null)
+        {
+            using var brush = new SolidBrush(Color.DimGray);
+            using var font = new Font("Segoe UI", 12, FontStyle.Regular);
+            var text = _report is null || _report.FramesCount <= 0
+                ? "Нет кадров для просмотра"
+                : "Кадр отсутствует или был исключён";
+            var format = new StringFormat
+            {
+                Alignment = StringAlignment.Center,
+                LineAlignment = StringAlignment.Center
+            };
+            e.Graphics.DrawString(text, font, brush, _pictureBox.ClientRectangle, format);
+            return;
+        }
+
+        if (_currentBboxes.Count == 0)
             return;
 
         var img = _pictureBox.Image;

@@ -455,6 +455,15 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
     final labels = _labelsDir;
     final current = _index;
 
+    if (current == _validationFrameIndex) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Этот кадр нужно разметить')),
+        );
+      }
+      return;
+    }
+
     _bboxes.remove(current);
     _skipped.add(current);
 
@@ -497,16 +506,19 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
       await _writeYoloLabel(i, boxes);
     }
 
+    final includedIndexes = <int>[];
     final imageFiles = <File>[];
     final labelFiles = <File>[];
     for (var i = 0; i < _frames.length; i++) {
       if (_skipped.contains(i)) continue;
+      includedIndexes.add(i);
       imageFiles.add(_frames[i]);
-      labelFiles.add(File('${_labelsDir!.path}/${_labelNameForIndex(i)}')); 
+      labelFiles.add(File('${_labelsDir!.path}/${_labelNameForIndex(i)}'));
     }
 
     debugPrint('ZIP INPUT IMAGES FINAL: ${imageFiles.length}');
     debugPrint('ZIP INPUT LABELS FINAL: ${labelFiles.length}');
+    debugPrint('ZIP INCLUDED FRAME INDEXES: $includedIndexes');
 
     final encoder = ZipFileEncoder();
     encoder.create(zipPath);
@@ -523,7 +535,9 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
     await meta.writeAsString(
       jsonEncode({
         'fps': ErrorDatasetFlowScreen.fps,
-        'frames': _frames.length,
+        'frames': imageFiles.length,
+        'sourceFrames': _frames.length,
+        'skippedFrames': _skipped.length,
         'preserveAspect': true,
         'validationFrameName': _validationFrameName,
       }),

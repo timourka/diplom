@@ -62,6 +62,7 @@ public class ErrorReportsDatasetController : ControllerBase
 
             var candidates = Directory.GetFiles(imagesDir, "*.*", SearchOption.TopDirectoryOnly)
                 .Where(IsSupportedImage)
+                .Where(IsUserReportFrame)
                 .OrderBy(_ => Random.Shared.Next())
                 .ToList();
 
@@ -145,17 +146,23 @@ public class ErrorReportsDatasetController : ControllerBase
         if (!Directory.Exists(labelsDir))
             return BadRequest("Zip must contain /labels folder.");
 
-        var imagesCount = Directory.GetFiles(imagesDir, "*.*", SearchOption.TopDirectoryOnly)
-            .Count(IsSupportedImage);
-
-        if (imagesCount == 0)
-            return BadRequest("No images found in /images.");
-
         var validationResult = await ValidateControlFrameIfPresentAsync(user, labelsDir, form.validationToken, form.validationFrameName, ct);
         if (validationResult is not null)
         {
             TryDeleteDirectory(datasetFolder);
             return validationResult;
+        }
+
+        RemoveValidationFrameIfPresent(imagesDir, labelsDir, form.validationFrameName);
+
+        var imagesCount = Directory.GetFiles(imagesDir, "*.*", SearchOption.TopDirectoryOnly)
+            .Where(IsSupportedImage)
+            .Count(IsUserReportFrame);
+
+        if (imagesCount == 0)
+        {
+            TryDeleteDirectory(datasetFolder);
+            return BadRequest("No report images found in /images.");
         }
 
         // 5) записываем VideoSample, путь = папка датасета (как ты хотел)
@@ -253,6 +260,37 @@ public class ErrorReportsDatasetController : ControllerBase
         path.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
         path.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase) ||
         path.EndsWith(".png", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsUserReportFrame(string path) =>
+        !Path.GetFileName(path).StartsWith("validation_", StringComparison.OrdinalIgnoreCase);
+
+    private static void RemoveValidationFrameIfPresent(string imagesDir, string labelsDir, string? validationFrameName)
+    {
+        if (string.IsNullOrWhiteSpace(validationFrameName))
+            return;
+
+        var safeName = Path.GetFileName(validationFrameName);
+        if (string.IsNullOrWhiteSpace(safeName) ||
+            !safeName.StartsWith("validation_", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        TryDeleteFile(Path.Combine(imagesDir, safeName));
+        TryDeleteFile(Path.Combine(labelsDir, Path.ChangeExtension(safeName, ".txt")));
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (System.IO.File.Exists(path))
+                System.IO.File.Delete(path);
+        }
+        catch
+        {
+        }
+    }
 
     private static async Task<List<YoloBboxDto>> ReadYoloBoxesAsync(string labelPath, CancellationToken ct)
     {
