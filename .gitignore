@@ -63,7 +63,7 @@ Desktop.ini
 *.pubxml
 *.publishproj
 PublishProfiles/
-publish/
+#publish/
 
 ## Dotnet local settings
 appsettings.Development.json
