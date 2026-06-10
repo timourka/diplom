@@ -63,7 +63,7 @@ class ApiClient {
   }
 
   void _throwIfBad(http.Response r) {
-    if (r.statusCode == 401 || r.statusCode == 403) {
+    if (r.statusCode == 401) {
       throw const AuthRequiredException();
     }
     if (r.statusCode < 200 || r.statusCode >= 300) {
@@ -168,7 +168,29 @@ class ApiClient {
     return decoded is List ? decoded : <dynamic>[];
   }
 
-  Future<void> uploadDatasetZip(String zipPath, {String comment = ''}) async {
+  Future<Map<String, dynamic>?> reportValidationFrame() async {
+    final r = await _safeRequest(
+      () => http.get(
+        Uri.parse('$baseUrl/api/error-reports/validation-frame'),
+        headers: _headers(auth: true),
+      ),
+    );
+
+    if (r.statusCode == 204 || r.statusCode == 404) {
+      return null;
+    }
+
+    _throwIfBad(r);
+    final decoded = jsonDecode(r.body);
+    return decoded is Map<String, dynamic> ? decoded : null;
+  }
+
+  Future<void> uploadDatasetZip(
+    String zipPath, {
+    String comment = '',
+    String? validationToken,
+    String? validationFrameName,
+  }) async {
     final uri = Uri.parse('$baseUrl/api/error-reports/upload-dataset');
     final req = http.MultipartRequest('POST', uri);
 
@@ -176,6 +198,12 @@ class ApiClient {
       req.headers['Authorization'] = 'Bearer $token';
     }
     req.fields['comment'] = comment;
+    if (validationToken != null && validationToken.isNotEmpty) {
+      req.fields['validationToken'] = validationToken;
+    }
+    if (validationFrameName != null && validationFrameName.isNotEmpty) {
+      req.fields['validationFrameName'] = validationFrameName;
+    }
     req.files.add(await http.MultipartFile.fromPath('datasetZip', zipPath));
 
     http.StreamedResponse res;
@@ -190,7 +218,7 @@ class ApiClient {
     }
 
     final body = await res.stream.bytesToString();
-    if (res.statusCode == 401 || res.statusCode == 403) {
+    if (res.statusCode == 401) {
       throw const AuthRequiredException();
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {

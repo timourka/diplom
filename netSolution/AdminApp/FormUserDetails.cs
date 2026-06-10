@@ -15,7 +15,6 @@ public sealed class FormUserDetails : Form
     private Label _lblErrorReportsCountValue = null!;
     private Label _lblApprovedReportsCountValue = null!;
     private TextBox _txtLogin = null!;
-    private TextBox _txtSettingsJson = null!;
     private CheckBox _chkBlocked = null!;
     private CheckBox _chkAdmin = null!;
     private Button _btnSave = null!;
@@ -62,14 +61,6 @@ public sealed class FormUserDetails : Form
         _txtLogin = new TextBox { Dock = DockStyle.Fill };
         _chkBlocked = new CheckBox { Text = "Пользователь заблокирован", AutoSize = true };
         _chkAdmin = new CheckBox { Text = "Административный профиль", AutoSize = true };
-        _txtSettingsJson = new TextBox
-        {
-            Dock = DockStyle.Fill,
-            Multiline = true,
-            ScrollBars = ScrollBars.Vertical,
-            AcceptsReturn = true,
-            AcceptsTab = true
-        };
 
         AddRow(root, 0, "Id", _lblIdValue);
         AddRow(root, 1, "Логин", _txtLogin);
@@ -79,7 +70,6 @@ public sealed class FormUserDetails : Form
         AddRow(root, 5, "Товаров на хранении", _lblStoredProductsCountValue);
         AddRow(root, 6, "Отчётов об ошибках", _lblErrorReportsCountValue);
         AddRow(root, 7, "Одобренных отчётов", _lblApprovedReportsCountValue);
-        AddRow(root, 8, "Настройки JSON", _txtSettingsJson, 3);
 
         root.RowStyles.Clear();
         for (var i = 0; i < 8; i++)
@@ -150,7 +140,6 @@ public sealed class FormUserDetails : Form
         _lblCreatedAtValue.Text = FormatDate(user.CreatedAt);
         _chkBlocked.Checked = user.IsBlocked;
         _chkAdmin.Checked = user.IsAdmin;
-        _txtSettingsJson.Text = user.SettingsJson ?? string.Empty;
         _lblStoredProductsCountValue.Text = user.StoredProductsCount.ToString();
         _lblErrorReportsCountValue.Text = user.ErrorReportsCount.ToString();
         _lblApprovedReportsCountValue.Text = user.ApprovedReportsCount.ToString();
@@ -179,7 +168,9 @@ public sealed class FormUserDetails : Form
                     login,
                     _chkBlocked.Checked,
                     _chkAdmin.Checked,
-                    string.IsNullOrWhiteSpace(_txtSettingsJson.Text) ? null : _txtSettingsJson.Text));
+                    null
+                )
+            );
 
             Render(_user);
             MessageBox.Show(this, "Пользователь сохранён.", "OK", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -236,7 +227,6 @@ public sealed class FormUserDetails : Form
         _txtLogin.Enabled = !busy;
         _chkBlocked.Enabled = !busy;
         _chkAdmin.Enabled = !busy;
-        _txtSettingsJson.Enabled = !busy;
     }
 
     private static void AddRow(TableLayoutPanel panel, int rowIndex, string caption, Control control, int rowSpan = 1)

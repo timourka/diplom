@@ -26,11 +26,18 @@ class PendingReportRepository {
     await FileKeyValueStore.setString(_pendingReportsKey, jsonEncode(items));
   }
 
-  Future<void> addPendingReport({required String zipPath, required String comment}) async {
+  Future<void> addPendingReport({
+    required String zipPath,
+    required String comment,
+    String? validationToken,
+    String? validationFrameName,
+  }) async {
     final pending = await readPendingReports();
     pending.add({
       'zipPath': zipPath,
       'comment': comment,
+      'validationToken': validationToken,
+      'validationFrameName': validationFrameName,
       'createdAt': DateTime.now().toIso8601String(),
     });
     await _writePendingReports(pending);
@@ -43,24 +50,33 @@ class PendingReportRepository {
     final remaining = <Map<String, dynamic>>[];
     var synced = 0;
 
-    for (final item in pending) {
+    for (var i = 0; i < pending.length; i++) {
+      final item = pending[i];
       final zipPath = item['zipPath']?.toString() ?? '';
       final comment = item['comment']?.toString() ?? '';
+      final validationToken = item['validationToken']?.toString();
+      final validationFrameName = item['validationFrameName']?.toString();
       if (zipPath.isEmpty || !await File(zipPath).exists()) {
         continue;
       }
 
       try {
-        await api.uploadDatasetZip(zipPath, comment: comment);
+        await api.uploadDatasetZip(
+          zipPath,
+          comment: comment,
+          validationToken: validationToken,
+          validationFrameName: validationFrameName,
+        );
         synced++;
       } on NetworkApiException {
         remaining.add(item);
       } on AuthRequiredException {
         remaining.add(item);
-        await _writePendingReports(remaining..addAll(pending.skip(pending.indexOf(item) + 1)));
+        remaining.addAll(pending.skip(i + 1));
+        await _writePendingReports(remaining);
         rethrow;
       } catch (_) {
-        // Повреждённый архив не оставляем в вечной очереди.
+        // Повреждённый архив или проваленная проверка не оставляем в вечной очереди.
       }
     }
 

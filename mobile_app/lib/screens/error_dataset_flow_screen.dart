@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -56,6 +57,9 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
   final Map<int, List<Rect>> _bboxes = {};
   final Set<int> _skipped = {};
   final Map<int, Size> _frameSizes = {};
+  String? _validationToken;
+  String? _validationFrameName;
+  int? _validationFrameIndex;
 
   final _comment = TextEditingController();
   final _pendingReports = PendingReportRepository();
@@ -160,6 +164,9 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
         _bboxes.clear();
         _skipped.clear();
         _frameSizes.clear();
+        _validationToken = null;
+        _validationFrameName = null;
+        _validationFrameIndex = null;
         _status = 'Запись кадров... (макс. ${ErrorDatasetFlowScreen.maxSeconds}s)';
       });
 
@@ -275,6 +282,8 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
         throw Exception('Не удалось сохранить ни одного кадра. Попробуй записать чуть дольше.');
       }
 
+      await _tryInjectValidationFrame();
+
       final sizes = <int, Size>{};
       for (var i = 0; i < _frames.length; i++) {
         sizes[i] = await _readImageSize(_frames[i]);
@@ -322,6 +331,53 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
     return 'frame_${i.toString().padLeft(5, '0')}.jpg';
   }
 
+  String _imageNameForIndex(int index) => _frames[index].uri.pathSegments.last;
+
+  String _labelNameForIndex(int index) {
+    final imageName = _imageNameForIndex(index);
+    final dot = imageName.lastIndexOf('.');
+    if (dot <= 0) return '$imageName.txt';
+    return '${imageName.substring(0, dot)}.txt';
+  }
+
+  Future<void> _tryInjectValidationFrame() async {
+    final images = _imagesDir;
+    if (images == null || _frames.isEmpty) return;
+
+    try {
+      final challenge = await AuthFlow.runWithReauth<Map<String, dynamic>?>(
+        context: context,
+        auth: widget.auth,
+        after: 'error',
+        action: () => ApiClient(token: widget.auth.token).reportValidationFrame(),
+      );
+
+      if (challenge == null) return;
+
+      final token = challenge['validationToken']?.toString() ?? '';
+      final fileNameRaw = challenge['fileName']?.toString() ?? '';
+      final imageBase64 = challenge['imageBase64']?.toString() ?? '';
+      if (token.isEmpty || fileNameRaw.isEmpty || imageBase64.isEmpty) return;
+
+      final safeFileName = fileNameRaw.split('/').last.split('\\').last;
+      final lower = safeFileName.toLowerCase();
+      if (!lower.endsWith('.jpg') && !lower.endsWith('.jpeg') && !lower.endsWith('.png')) return;
+
+      final file = File('${images.path}/$safeFileName');
+      await file.writeAsBytes(base64Decode(imageBase64), flush: true);
+
+      final insertAt = math.Random().nextInt(_frames.length + 1);
+      _frames.insert(insertAt, file);
+      _validationToken = token;
+      _validationFrameName = safeFileName;
+      _validationFrameIndex = insertAt;
+    } on NetworkApiException {
+      // Отчёт можно подготовить офлайн. Проверочный кадр будет добавлен только при наличии связи.
+    } on ApiRequestException {
+      // Если сервер временно не нашёл подходящий подтверждённый кадр, не блокируем создание отчёта.
+    }
+  }
+
   Future<Size> _readImageSize(File file) async {
     final bytes = await file.readAsBytes();
     final completer = Completer<Size>();
@@ -341,7 +397,7 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
 
   Future<void> _writeYoloLabel(int index, List<Rect> rects) async {
     final labels = _labelsDir!;
-    final name = _frameName(index).replaceAll('.jpg', '.txt');
+    final name = _labelNameForIndex(index);
     final path = '${labels.path}/$name';
 
     final imageSize = await _frameSizeForIndex(index);
@@ -403,7 +459,7 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
     _skipped.add(current);
 
     if (labels != null) {
-      final labelFile = File('${labels.path}/${_frameName(current).replaceAll('.jpg', '.txt')}');
+      final labelFile = File('${labels.path}/${_labelNameForIndex(current)}');
       try {
         if (await labelFile.exists()) await labelFile.delete();
       } catch (_) {
@@ -446,7 +502,7 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
     for (var i = 0; i < _frames.length; i++) {
       if (_skipped.contains(i)) continue;
       imageFiles.add(_frames[i]);
-      labelFiles.add(File('${_labelsDir!.path}/${_frameName(i).replaceAll('.jpg', '.txt')}'));
+      labelFiles.add(File('${_labelsDir!.path}/${_labelNameForIndex(i)}')); 
     }
 
     debugPrint('ZIP INPUT IMAGES FINAL: ${imageFiles.length}');
@@ -465,7 +521,12 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
 
     final meta = File('${root.path}/meta.json');
     await meta.writeAsString(
-      '{"fps":${ErrorDatasetFlowScreen.fps},"frames":${_frames.length},"preserveAspect":true}',
+      jsonEncode({
+        'fps': ErrorDatasetFlowScreen.fps,
+        'frames': _frames.length,
+        'preserveAspect': true,
+        'validationFrameName': _validationFrameName,
+      }),
       flush: true,
     );
     encoder.addFile(meta, 'meta.json');
@@ -505,10 +566,20 @@ class _ErrorDatasetFlowScreenState extends State<ErrorDatasetFlowScreen> {
           context: context,
           auth: widget.auth,
           after: 'error',
-          action: () => ApiClient(token: widget.auth.token).uploadDatasetZip(zipPath, comment: comment),
+          action: () => ApiClient(token: widget.auth.token).uploadDatasetZip(
+            zipPath,
+            comment: comment,
+            validationToken: _validationToken,
+            validationFrameName: _validationFrameName,
+          ),
         );
       } on NetworkApiException {
-        await _pendingReports.addPendingReport(zipPath: zipPath, comment: comment);
+        await _pendingReports.addPendingReport(
+          zipPath: zipPath,
+          comment: comment,
+          validationToken: _validationToken,
+          validationFrameName: _validationFrameName,
+        );
         await _releaseCamera();
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
